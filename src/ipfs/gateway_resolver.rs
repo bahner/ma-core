@@ -4,7 +4,7 @@
 use async_trait::async_trait;
 #[cfg(not(target_arch = "wasm32"))]
 use async_trait::async_trait;
-use did_ma::Document;
+use ma_did::Document;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -129,7 +129,7 @@ impl IpfsGatewayResolver {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl DidDocumentResolver for IpfsGatewayResolver {
     async fn resolve(&self, did: &str) -> crate::error::Result<Document> {
-        let parsed = did_ma::Did::try_from(did).map_err(crate::error::Error::Validation)?;
+        let parsed = ma_did::Did::try_from(did).map_err(crate::error::Error::Validation)?;
         let did_key = did.to_string();
         let positive_ttl = self.positive_ttl();
         let negative_ttl = self.negative_ttl();

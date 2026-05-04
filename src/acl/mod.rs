@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cid::Cid;
-use did_ma::Did;
+use ma_did::Did;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use crate::ipfs::{ipfs_add, name_publish_with_retry, IpnsPublishOptions};

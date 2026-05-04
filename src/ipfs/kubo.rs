@@ -4,7 +4,7 @@
 //! put/get, IPNS name publish/resolve, key management, and pinning.
 
 use anyhow::{anyhow, Result};
-use did_ma::{Did, Document};
+use ma_did::{Did, Document};
 use reqwest::multipart;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};

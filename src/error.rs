@@ -23,7 +23,7 @@ pub enum Error {
 
     // ─── Validation ─────────────────────────────────────────────────────
     #[error("message validation failed: {0}")]
-    Validation(#[from] did_ma::MaError),
+    Validation(#[from] ma_did::MaError),
 
     #[error("message signature verification failed")]
     SignatureVerification,

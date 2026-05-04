@@ -83,7 +83,7 @@ pub(crate) mod ttl_queue;
 
 // ─── Re-export did-ma types so users don't need a separate dependency ───────
 
-pub use did_ma::{
+pub use ma_did::{
     Did, Document, EncryptionKey, Headers, MaError, Message, Proof, ReplayGuard, SigningKey,
     VerificationMethod, DEFAULT_MAX_CLOCK_SKEW_SECS, DEFAULT_MESSAGE_TTL_SECS,
     DEFAULT_REPLAY_WINDOW_SECS,

@@ -5,7 +5,7 @@
 //! `ma/ipfs/0.0.1` service.
 
 use anyhow::{anyhow, Result};
-use did_ma::{Did, Document, Message};
+use ma_did::{Did, Document, Message};
 use serde::{Deserialize, Serialize};
 
 pub const MA_IPNS_ALIAS_HASH_PREFIX: &str = "ma-";

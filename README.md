@@ -45,9 +45,9 @@ When using iroh transport, update DID metadata from the live endpoint before
 publishing at startup:
 
 1. Start your endpoint backend.
-2. Register required services.
-3. Reconcile `ma.iroh` fields from live endpoint state.
-4. Re-sign and publish only when reconciliation reports changes.
+1. Register required services.
+1. Reconcile `ma.iroh` fields from live endpoint state.
+1. Re-sign and publish only when reconciliation reports changes.
 
 ### DID resolution
 
