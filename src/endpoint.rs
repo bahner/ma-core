@@ -30,7 +30,8 @@ pub const DEFAULT_DELIVERY_PROTOCOL_ID: &str = INBOX_PROTOCOL_ID;
 ///
 /// Each implementation provides inbox/outbox
 /// messaging and advertises its registered services for DID documents.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait MaEndpoint: Send + Sync {
     /// The endpoint's public identifier (hex string).
     fn id(&self) -> String;

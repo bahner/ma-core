@@ -264,7 +264,8 @@ fn ma_iroh_ipld(endpoint_id: String, relay_url: String) -> Ipld {
     Ipld::Map(iroh)
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl MaEndpoint for IrohEndpoint {
     fn id(&self) -> String {
         self.endpoint.id().to_string()
