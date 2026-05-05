@@ -4,16 +4,12 @@
 //! the [`IpfsDidPublisher`] for publishing signed DID documents via the
 //! `ma/ipfs/0.0.1` service.
 
-use anyhow::{anyhow, Result};
 use crate::{Did, Document, Message};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 pub const MA_IPNS_ALIAS_HASH_PREFIX: &str = "ma-";
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use base64::engine::general_purpose::STANDARD as B64;
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use base64::Engine;
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use std::time::Duration;
 
@@ -26,9 +22,8 @@ use crate::service::CONTENT_TYPE_IPFS_REQUEST;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IpfsPublishDidRequest {
-    pub did_document_json: String,
-    #[serde(default)]
-    pub ipns_private_key_base64: String,
+    pub did_document: Vec<u8>,
+    pub ipns_private_key: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -45,6 +40,27 @@ pub struct ValidatedIpfsPublish {
     pub request: IpfsPublishDidRequest,
     pub document: Document,
     pub document_did: Did,
+}
+
+/// Build CBOR content bytes for `application/x-ma-ipfs-request`.
+///
+/// The returned bytes are the payload to place in `Message.content` when
+/// sending to `/ma/ipfs/0.0.1`.
+pub fn generate_ipfs_publish_request(
+    did_document: &Document,
+    ipns_private_key: &[u8],
+) -> Result<Vec<u8>> {
+    let request = IpfsPublishDidRequest {
+        did_document: did_document
+            .to_cbor()
+            .map_err(|e| anyhow!("failed to encode DID document as dag-cbor: {}", e))?,
+        ipns_private_key: ipns_private_key.to_vec(),
+    };
+
+    let mut payload = Vec::new();
+    ciborium::ser::into_writer(&request, &mut payload)
+        .map_err(|e| anyhow!("failed to encode IPFS publish payload as CBOR: {}", e))?;
+    Ok(payload)
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
@@ -73,11 +89,10 @@ impl IpfsDidPublisher {
 
     pub async fn publish_document(
         &self,
-        did_document_json: &str,
-        ipns_private_key_base64: &str,
+        did_document: &[u8],
+        ipns_private_key: &[u8],
     ) -> Result<Option<String>> {
-        publish_did_document_to_kubo(&self.kubo_url, did_document_json, ipns_private_key_base64)
-            .await
+        publish_did_document_to_kubo(&self.kubo_url, did_document, ipns_private_key).await
     }
 
     pub async fn wait_until_ready(&self, attempts: u32) -> Result<()> {
@@ -148,11 +163,11 @@ pub fn validate_ipfs_publish_request(message_cbor: &[u8]) -> Result<ValidatedIpf
     let sender_did = Did::try_from(message.from.as_str())
         .map_err(|e| anyhow!("invalid sender did '{}': {}", message.from, e))?;
 
-    let request: IpfsPublishDidRequest = serde_json::from_slice(&message.content)
+    let request: IpfsPublishDidRequest = ciborium::de::from_reader(message.content.as_slice())
         .map_err(|e| anyhow!("invalid IPFS publish payload: {}", e))?;
 
-    let document = Document::unmarshal(&request.did_document_json)
-        .map_err(|e| anyhow!("invalid DID document JSON: {}", e))?;
+    let document = Document::from_cbor(&request.did_document)
+        .map_err(|e| anyhow!("invalid DID document dag-cbor: {}", e))?;
     document
         .validate()
         .map_err(|e| anyhow!("invalid DID document: {}", e))?;
@@ -185,11 +200,11 @@ pub fn validate_ipfs_publish_request(message_cbor: &[u8]) -> Result<ValidatedIpf
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub async fn publish_did_document_to_kubo(
     kubo_url: &str,
-    did_document_json: &str,
-    ipns_private_key_base64: &str,
+    did_document: &[u8],
+    ipns_private_key: &[u8],
 ) -> Result<Option<String>> {
-    let document = Document::unmarshal(did_document_json)
-        .map_err(|e| anyhow!("invalid DID document JSON: {}", e))?;
+    let document = Document::from_cbor(did_document)
+        .map_err(|e| anyhow!("invalid DID document dag-cbor: {}", e))?;
     let document_did = Did::try_from(document.id.as_str())
         .map_err(|e| anyhow!("invalid document DID '{}': {}", document.id, e))?;
     let document_ipns_id = document_did.ipns.clone();
@@ -214,17 +229,13 @@ pub async fn publish_did_document_to_kubo(
             ));
         }
     } else {
-        if ipns_private_key_base64.trim().is_empty() {
+        if ipns_private_key.is_empty() {
             return Err(anyhow!(
-                "ipns_private_key_base64 is required when key is not present in Kubo"
+                "ipns_private_key is required when key is not present in Kubo"
             ));
         }
 
-        let key_bytes = B64
-            .decode(ipns_private_key_base64.trim())
-            .map_err(|e| anyhow!("invalid base64 key payload: {}", e))?;
-
-        let imported = import_key(kubo_url, &key_name, key_bytes).await?;
+        let imported = import_key(kubo_url, &key_name, ipns_private_key.to_vec()).await?;
         if imported.id.trim() != document_ipns_id {
             return Err(anyhow!(
                 "imported key IPNS id '{}' does not match document DID IPNS '{}'",
@@ -258,8 +269,8 @@ pub async fn handle_ipfs_publish(
 
     let cid = publish_did_document_to_kubo(
         kubo_url,
-        &validated.request.did_document_json,
-        &validated.request.ipns_private_key_base64,
+        &validated.request.did_document,
+        &validated.request.ipns_private_key,
     )
     .await?;
 
