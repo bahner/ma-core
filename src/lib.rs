@@ -64,6 +64,9 @@
 pub mod acl;
 #[cfg(feature = "config")]
 pub mod config;
+pub mod constants;
+pub mod did;
+pub mod doc;
 pub mod endpoint;
 pub mod error;
 pub mod identity;
@@ -73,6 +76,11 @@ pub mod ipfs;
 #[cfg(feature = "iroh")]
 #[allow(dead_code)]
 mod iroh;
+pub mod key;
+#[cfg(feature = "kubo")]
+pub mod kubo;
+pub mod msg;
+mod multiformat;
 #[cfg(feature = "iroh")]
 #[allow(dead_code)]
 mod outbox;
@@ -81,17 +89,26 @@ pub mod topic;
 pub mod transport;
 pub(crate) mod ttl_queue;
 
-// ─── Re-export did-ma types so users don't need a separate dependency ───────
+// ─── Re-export DID/message primitives ───────────────────────────────────────
 
-pub use ma_did::{
-    Did, Document, EncryptionKey, Headers, MaError, Message, Proof, ReplayGuard, SigningKey,
-    VerificationMethod, DEFAULT_MAX_CLOCK_SKEW_SECS, DEFAULT_MESSAGE_TTL_SECS,
-    DEFAULT_REPLAY_WINDOW_SECS,
+pub use did::{Did, DID_PREFIX};
+pub use doc::{
+    now_iso_utc, Document, Proof, VerificationMethod, DEFAULT_DID_CONTEXT, DEFAULT_PROOF_PURPOSE,
+    DEFAULT_PROOF_TYPE,
 };
-
-// ─── Re-export core error type ──────────────────────────────────────────────
-
-pub use error::{Error, Result};
+pub use error::{Error, MaError, Result};
+pub use identity::{
+    generate_identity, generate_identity_from_secret, ipns_from_secret, GeneratedIdentity,
+};
+pub use ipld_core::ipld::Ipld;
+pub use key::{
+    EncryptionKey, SigningKey, ASSERTION_METHOD_KEY_TYPE, ED25519_PUB_CODEC, EDDSA_SIG_CODEC,
+    KEY_AGREEMENT_KEY_TYPE, X25519_PUB_CODEC,
+};
+pub use msg::{
+    Envelope, Headers, Message, ReplayGuard, DEFAULT_MAX_CLOCK_SKEW_SECS, DEFAULT_MESSAGE_TTL_SECS,
+    DEFAULT_REPLAY_WINDOW_SECS, MESSAGE_PREFIX,
+};
 
 #[cfg(feature = "acl")]
 pub use acl::Acl;

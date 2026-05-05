@@ -16,8 +16,8 @@
 //! ```
 
 use crate::error::{Error, Result};
+use crate::Message;
 use async_trait::async_trait;
-use ma_did::Message;
 
 #[async_trait]
 pub(crate) trait OutboxWire: Send + std::fmt::Debug {

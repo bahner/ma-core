@@ -3,8 +3,8 @@
 //! HTTP helpers for the Kubo `/api/v0/` endpoints: data add/cat, DAG
 //! put/get, IPNS name publish/resolve, key management, and pinning.
 
-use anyhow::{anyhow, Result};
 use crate::{Did, Document};
+use anyhow::{anyhow, Result};
 use reqwest::multipart;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};

@@ -16,10 +16,9 @@ default = ["iroh", "gossip"]
 kubo = []
 iroh = ["dep:iroh"]
 gossip = ["iroh", "dep:iroh-gossip"]
-acl = ["dep:cid", "dep:serde_yaml"]
+acl = ["dep:serde_yaml"]
 config = [
     "dep:argon2",
-    "dep:chacha20poly1305",
     "dep:clap",
     "dep:directories",
     "dep:serde_yaml",
@@ -34,24 +33,35 @@ async-trait = "0.1"
 base64 = "0.22"
 blake3 = "1"
 bytes = "1.11.1"
-cid = { version = "0.11.3", features = ["serde"], optional = true }
-chacha20poly1305 = { version = "0.10", optional = true }
+chacha20poly1305 = "0.10"
+cid = { version = "0.11.3", features = ["serde"] }
+ciborium = "0.2"
 clap = { version = "4", features = ["derive", "env"], optional = true }
-ma-did = "0.5.2"
 directories = { version = "5", optional = true }
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+hex = "0.4"
+ipld-core = { version = "0.4", features = ["serde"] }
 iroh = { version = "^0.98", default-features = false, features = ["tls-ring"], optional = true }
 iroh-gossip = { version = "^0.98", default-features = false, features = ["net"], optional = true }
+iroh-base = "^0.98"
+libp2p-identity = { version = "0.2", features = ["ed25519", "peerid"] }
+multibase = "0.9"
+nanoid = "0.4"
 rand = "0.8"
+rand_core = { version = "0.6", features = ["getrandom"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_ipld_dagcbor = "0.6"
+serde_ipld_dagjson = "0.2"
 serde_json = "1.0"
 serde_yaml = { version = "0.9", optional = true }
 thiserror = "2"
 tokio = { version = "1.52", features = ["io-util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+unsigned-varint = "0.8"
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 zeroize = { version = "1", features = ["derive"], optional = true }
-iroh-base = "^0.98"
 
 [dev-dependencies]
 tokio = { version = "1.52", features = ["macros", "rt"] }

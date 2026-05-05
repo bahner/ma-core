@@ -4,8 +4,8 @@
 //! the [`IpfsDidPublisher`] for publishing signed DID documents via the
 //! `ma/ipfs/0.0.1` service.
 
-use anyhow::{anyhow, Result};
 use crate::{Did, Document, Message};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 pub const MA_IPNS_ALIAS_HASH_PREFIX: &str = "ma-";

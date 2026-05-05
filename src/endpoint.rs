@@ -15,10 +15,10 @@ use crate::service::INBOX_PROTOCOL_ID;
 #[cfg(feature = "iroh")]
 use crate::transport::resolve_endpoint_for_protocol;
 #[cfg(feature = "iroh")]
-use crate::Outbox;
+use crate::Document;
+use crate::Message;
 #[cfg(feature = "iroh")]
-use ma_did::Document;
-use ma_did::Message;
+use crate::Outbox;
 
 /// Default inbox capacity for services.
 pub const DEFAULT_INBOX_CAPACITY: usize = 256;

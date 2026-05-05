@@ -31,11 +31,11 @@ use std::sync::{Arc, Mutex};
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use std::time::Duration;
 
+use crate::Did;
 use cid::Cid;
-use ma_did::Did;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use crate::ipfs::{ipfs_add, name_publish_with_retry, IpnsPublishOptions};
+use crate::kubo::{ipfs_add, name_publish_with_retry, IpnsPublishOptions};
 use crate::{Error, Result};
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use tokio::task::JoinHandle;

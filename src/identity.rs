@@ -1,13 +1,101 @@
-//! Secure secret key bootstrap helpers.
+//! Identity bootstrap helpers.
 //!
-//! These functions manage persisted 32-byte secret keys so that an endpoint
-//! retains the same identity across restarts.
+//! - DID generation from secrets (via `generate_identity`, `generate_identity_from_secret`)
+//! - Persisted 32-byte secret key management for endpoint identity across restarts
 
 use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 
+use libp2p_identity::PeerId;
+
 use crate::error::{Error, Result};
+use crate::{Did, Document, EncryptionKey, MaError, SigningKey, VerificationMethod};
+
+// ─── DID identity generation (from ma-did) ──────────────────────────────────
+
+/// A generated DID identity with keys and a signed document.
+///
+/// Private keys are hex-encoded for storage. Use [`SigningKey::from_private_key_bytes`]
+/// and [`EncryptionKey::from_private_key_bytes`] to reconstruct key objects.
+#[derive(Debug, Clone)]
+pub struct GeneratedIdentity {
+    pub subject_url: Did,
+    pub document: Document,
+    pub signing_private_key_hex: String,
+    pub encryption_private_key_hex: String,
+}
+
+fn build_identity(ipns: &str) -> Result<GeneratedIdentity> {
+    let subject_url = Did::new_url(ipns, None::<String>).map_err(Error::Validation)?;
+    let sign_url = Did::new_url(ipns, None::<String>).map_err(Error::Validation)?;
+    let enc_url = Did::new_url(ipns, None::<String>).map_err(Error::Validation)?;
+
+    let signing_key = SigningKey::generate(sign_url).map_err(Error::Validation)?;
+    let encryption_key = EncryptionKey::generate(enc_url).map_err(Error::Validation)?;
+
+    let mut document = Document::new(&subject_url, &subject_url);
+
+    let assertion_vm = VerificationMethod::new(
+        subject_url.base_id(),
+        subject_url.base_id(),
+        signing_key.key_type.clone(),
+        signing_key.did.fragment.as_deref().unwrap_or_default(),
+        signing_key.public_key_multibase.clone(),
+    )
+    .map_err(Error::Validation)?;
+
+    let key_agreement_vm = VerificationMethod::new(
+        subject_url.base_id(),
+        subject_url.base_id(),
+        encryption_key.key_type.clone(),
+        encryption_key.did.fragment.as_deref().unwrap_or_default(),
+        encryption_key.public_key_multibase.clone(),
+    )
+    .map_err(Error::Validation)?;
+
+    let assertion_vm_id = assertion_vm.id.clone();
+    document
+        .add_verification_method(assertion_vm.clone())
+        .map_err(Error::Validation)?;
+    document
+        .add_verification_method(key_agreement_vm.clone())
+        .map_err(Error::Validation)?;
+    document.assertion_method = vec![assertion_vm_id];
+    document.key_agreement = vec![key_agreement_vm.id.clone()];
+    document
+        .sign(&signing_key, &assertion_vm)
+        .map_err(Error::Validation)?;
+
+    Ok(GeneratedIdentity {
+        subject_url,
+        document,
+        signing_private_key_hex: hex::encode(signing_key.private_key_bytes()),
+        encryption_private_key_hex: hex::encode(encryption_key.private_key_bytes()),
+    })
+}
+
+/// Derive the `did:ma` IPNS identifier from a caller-managed Ed25519 secret.
+pub fn ipns_from_secret(secret: [u8; 32]) -> Result<String> {
+    let keypair = libp2p_identity::Keypair::ed25519_from_bytes(secret)
+        .map_err(|_| Error::Validation(MaError::InvalidIdentitySecret))?;
+    let peer_id = PeerId::from_public_key(&keypair.public());
+    Ok(peer_id.to_string())
+}
+
+/// Generate a base DID identity with keys and a signed document.
+pub fn generate_identity(ipns: &str) -> Result<GeneratedIdentity> {
+    build_identity(ipns)
+}
+
+/// Generate a base DID identity where the `did:ma` IPNS identifier is derived
+/// from a caller-managed Ed25519 secret.
+pub fn generate_identity_from_secret(secret: [u8; 32]) -> Result<GeneratedIdentity> {
+    let ipns = ipns_from_secret(secret)?;
+    build_identity(&ipns)
+}
+
+// ─── Secret key file helpers ─────────────────────────────────────────────────
 
 /// Load a secret key from a 32-byte file on disk.
 ///

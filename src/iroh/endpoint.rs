@@ -14,7 +14,7 @@ use crate::inbox::Inbox;
 use crate::iroh::channel::Channel;
 use crate::outbox::Outbox;
 use crate::transport::transport_string;
-use ma_did::{now_iso_utc, Document, Ipld, Message};
+use crate::{now_iso_utc, Document, Ipld, Message};
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -447,7 +447,7 @@ mod tests {
         extract_ma_iroh_route, reconcile_document_ma_iroh_fields, MA_IROH_KEY,
         MA_IROH_RELAY_URL_KEY,
     };
-    use ma_did::{Did, Document, Ipld};
+    use crate::{Did, Document, Ipld};
     use std::collections::BTreeMap;
 
     fn test_doc() -> Document {
@@ -556,14 +556,14 @@ mod tests {
         bytes
     }
 
-    fn test_message() -> ma_did::Message {
-        use ma_did::{Did, SigningKey};
+    fn test_message() -> crate::Message {
+        use crate::{Did, SigningKey};
         let did =
             Did::new_identity("k51qzi5uqu5dkkciu33khkzbcmxtyhn376i1e83tya8kuy7z9euedzyr5nhoew")
                 .expect("valid did");
         let did_id = did.id();
         let sk = SigningKey::generate(did).expect("signing key");
-        ma_did::Message::new(
+        crate::Message::new(
             did_id,
             String::new(),
             crate::service::CONTENT_TYPE_BROADCAST,

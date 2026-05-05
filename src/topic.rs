@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ma_did::Message;
+use crate::Message;
 
 use crate::endpoint::DEFAULT_INBOX_CAPACITY;
 use crate::inbox::Inbox;
@@ -241,7 +241,7 @@ fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ma_did::{Did, SigningKey};
+    use crate::{Did, SigningKey};
 
     fn test_signing_key() -> (SigningKey, String) {
         let did = Did::new_identity("k51qzi5uqu5test").expect("did");

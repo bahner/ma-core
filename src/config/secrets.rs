@@ -338,10 +338,10 @@ impl SecretBundle {
 
     /// Derive the DID identity from this bundle's `ipns_secret_key`.
     ///
-    /// Calls [`ma_did::generate_identity_from_secret`] with the bundle's IPNS
+    /// Calls [`crate::generate_identity_from_secret`] with the bundle's IPNS
     /// key so callers do not need to handle the IPNS/PeerId derivation themselves.
-    pub fn generate_identity(&self) -> Result<ma_did::GeneratedIdentity> {
-        ma_did::generate_identity_from_secret(self.ipns_secret_key)
+    pub fn generate_identity(&self) -> Result<crate::GeneratedIdentity> {
+        crate::generate_identity_from_secret(self.ipns_secret_key)
             .map_err(|e| Error::Secrets(format!("identity generation failed: {e}")))
     }
 }
