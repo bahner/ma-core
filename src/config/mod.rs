@@ -710,9 +710,6 @@ impl Config {
     /// Returns an error if either file already exists.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn gen_headless(args: &MaArgs, default_slug: &'static str) -> Result<()> {
-        use base64::engine::general_purpose::STANDARD;
-        use base64::Engine;
-
         let slug = args.slug.as_deref().unwrap_or(default_slug).to_string();
 
         let config_path = if let Some(ref p) = args.config {
@@ -743,10 +740,8 @@ impl Config {
         let passphrase = if let Some(ref p) = args.secret_bundle_passphrase {
             p.clone()
         } else {
-            let mut bytes = [0u8; 32];
-            use rand::RngCore;
-            rand::rngs::OsRng.fill_bytes(&mut bytes);
-            STANDARD.encode(bytes)
+            use rand::distributions::{Alphanumeric, DistString};
+            Alphanumeric.sample_string(&mut rand::rngs::OsRng, 43)
         };
 
         // Generate and save the bundle.
