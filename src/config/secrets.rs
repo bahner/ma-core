@@ -329,6 +329,21 @@ impl SecretBundle {
         let encrypted = self.encrypt(passphrase)?;
         super::write_secure(path, &encrypted)
     }
+
+    /// Generate a random alphanumeric passphrase (43 characters ≈ 256 bits entropy).
+    pub fn generate_passphrase() -> String {
+        use rand::distributions::{Alphanumeric, DistString};
+        Alphanumeric.sample_string(&mut rand::rngs::OsRng, 43)
+    }
+
+    /// Derive the DID identity from this bundle's `ipns_secret_key`.
+    ///
+    /// Calls [`ma_did::generate_identity_from_secret`] with the bundle's IPNS
+    /// key so callers do not need to handle the IPNS/PeerId derivation themselves.
+    pub fn generate_identity(&self) -> Result<ma_did::GeneratedIdentity> {
+        ma_did::generate_identity_from_secret(self.ipns_secret_key)
+            .map_err(|e| Error::Secrets(format!("identity generation failed: {e}")))
+    }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

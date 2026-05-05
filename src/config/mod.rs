@@ -740,8 +740,7 @@ impl Config {
         let passphrase = if let Some(ref p) = args.secret_bundle_passphrase {
             p.clone()
         } else {
-            use rand::distributions::{Alphanumeric, DistString};
-            Alphanumeric.sample_string(&mut rand::rngs::OsRng, 43)
+            SecretBundle::generate_passphrase()
         };
 
         // Generate and save the bundle.

@@ -37,7 +37,7 @@ bytes = "1.11.1"
 cid = { version = "0.11.3", features = ["serde"], optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 clap = { version = "4", features = ["derive", "env"], optional = true }
-ma-did = "^0.5"
+ma-did = "0.5.2"
 directories = { version = "5", optional = true }
 iroh = { version = "^0.98", default-features = false, features = ["tls-ring"], optional = true }
 iroh-gossip = { version = "^0.98", default-features = false, features = ["net"], optional = true }
