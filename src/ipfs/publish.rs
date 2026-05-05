@@ -14,7 +14,9 @@ pub const MA_IPNS_ALIAS_HASH_PREFIX: &str = "ma-";
 use std::time::Duration;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use super::kubo::{dag_put, import_key, list_keys, name_publish_with_retry, IpnsPublishOptions};
+use crate::kubo::{
+    dag_put, import_key, list_keys, name_publish_with_retry, wait_for_api, IpnsPublishOptions,
+};
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use reqwest::Url;
 
@@ -96,7 +98,7 @@ impl IpfsDidPublisher {
     }
 
     pub async fn wait_until_ready(&self, attempts: u32) -> Result<()> {
-        super::kubo::wait_for_api(&self.kubo_url, attempts).await
+        wait_for_api(&self.kubo_url, attempts).await
     }
 }
 
