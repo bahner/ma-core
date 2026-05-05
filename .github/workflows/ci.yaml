@@ -52,7 +52,7 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable --target wasm32-unknown-unknown
 
-      - name: Check wasm32
+      - name: Check wasm32 (wasm target deps include getrandom/js)
         run: cargo check --no-default-features --target wasm32-unknown-unknown
 
   fmt:

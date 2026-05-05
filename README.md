@@ -302,6 +302,8 @@ Wasm, slim iroh-only profile:
 cargo check --target wasm32-unknown-unknown --no-default-features --features iroh
 ```
 
+Note: target-specific wasm dependencies in `Cargo.toml` enable required web RNG support (`getrandom/js`) automatically for `wasm32-unknown-unknown`.
+
 Wasm, iroh + gossip profile (when you need broadcast):
 
 ```bash
