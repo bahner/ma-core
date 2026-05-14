@@ -637,7 +637,11 @@ pub async fn import_key(kubo_url: &str, key_name: &str, key_bytes: Vec<u8>) -> R
         .timeout(Duration::from_secs(10))
         .build()?
         .post(url)
-        .query(&[("arg", key_name), ("allow-any-key-type", "true")])
+        .query(&[
+            ("arg", key_name),
+            ("ipns-base", "base36"),
+            ("allow-any-key-type", "true"),
+        ])
         .multipart(form)
         .send()
         .await?

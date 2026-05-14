@@ -219,11 +219,17 @@ pub async fn publish_did_document_to_kubo(
             ));
         }
 
-        let key_bytes = B64
+        let raw_key: [u8; 32] = B64
             .decode(ipns_private_key_base64.trim())
-            .map_err(|e| anyhow!("invalid base64 key payload: {}", e))?;
-
-        let imported = import_key(kubo_url, &key_name, key_bytes).await?;
+            .map_err(|e| anyhow!("invalid base64 key payload: {}", e))?
+            .try_into()
+            .map_err(|_| anyhow!("ipns_private_key must be 32 bytes"))?;
+        let keypair = libp2p_identity::Keypair::ed25519_from_bytes(raw_key)
+            .map_err(|e| anyhow!("invalid ipns key: {}", e))?;
+        let protobuf_key = keypair
+            .to_protobuf_encoding()
+            .map_err(|e| anyhow!("failed to encode ipns key: {}", e))?;
+        let imported = import_key(kubo_url, &key_name, protobuf_key).await?;
         if imported.id.trim() != document_ipns_id {
             return Err(anyhow!(
                 "imported key IPNS id '{}' does not match document DID IPNS '{}'",

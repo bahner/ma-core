@@ -237,7 +237,16 @@ pub async fn publish_did_document_to_kubo(
             ));
         }
 
-        let imported = import_key(kubo_url, &key_name, ipns_private_key.to_vec()).await?;
+        let keypair = libp2p_identity::Keypair::ed25519_from_bytes(
+            ipns_private_key
+                .try_into()
+                .map_err(|_| anyhow!("ipns_private_key must be 32 bytes"))?,
+        )
+        .map_err(|e| anyhow!("invalid ipns key: {}", e))?;
+        let protobuf_key = keypair
+            .to_protobuf_encoding()
+            .map_err(|e| anyhow!("failed to encode ipns key: {}", e))?;
+        let imported = import_key(kubo_url, &key_name, protobuf_key).await?;
         if imported.id.trim() != document_ipns_id {
             return Err(anyhow!(
                 "imported key IPNS id '{}' does not match document DID IPNS '{}'",
