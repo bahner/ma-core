@@ -152,7 +152,7 @@ fn normalize_kubo_url(input: &str) -> Result<String> {
 
 pub fn validate_ipfs_publish_request(message_cbor: &[u8]) -> Result<ValidatedIpfsPublish> {
     let message =
-        Message::from_cbor(message_cbor).map_err(|e| anyhow!("invalid signed message: {}", e))?;
+        Message::decode(message_cbor).map_err(|e| anyhow!("invalid signed message: {}", e))?;
 
     if message.content_type != CONTENT_TYPE_IPFS_REQUEST {
         return Err(anyhow!(
@@ -334,7 +334,7 @@ mod tests {
             &signing_key,
         )
         .expect("message");
-        let encoded = message.to_cbor().expect("message cbor");
+        let encoded = message.encode().expect("message cbor");
 
         let validated = validate_ipfs_publish_request(&encoded).expect("validated request");
         assert_eq!(validated.document, identity.document);
@@ -355,7 +355,7 @@ mod tests {
             &signing_key,
         )
         .expect("message");
-        let encoded = message.to_cbor().expect("message cbor");
+        let encoded = message.encode().expect("message cbor");
 
         let err = validate_ipfs_publish_request(&encoded)
             .err()
@@ -380,7 +380,7 @@ mod tests {
             &signing_key,
         )
         .expect("message");
-        let encoded = message.to_cbor().expect("message cbor");
+        let encoded = message.encode().expect("message cbor");
 
         let err = validate_ipfs_publish_request(&encoded)
             .err()
@@ -406,7 +406,7 @@ mod tests {
             &signing_key,
         )
         .expect("message");
-        let encoded = message.to_cbor().expect("message cbor");
+        let encoded = message.encode().expect("message cbor");
 
         let err = validate_ipfs_publish_request(&encoded)
             .err()

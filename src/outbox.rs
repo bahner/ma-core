@@ -56,7 +56,7 @@ impl Outbox {
     /// Returns an error if validation, serialization, or transport send fails.
     pub async fn send(&mut self, message: &Message) -> Result<()> {
         message.headers().validate()?;
-        let cbor = message.to_cbor()?;
+        let cbor = message.encode()?;
         match self.inner.as_mut() {
             Some(transport) => transport.send_payload(&cbor).await,
             None => Err(Error::ConnectionClosed("outbox is closed".to_string())),

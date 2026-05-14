@@ -215,7 +215,7 @@ impl MaEndpoint for IrohEndpoint {
 
     async fn send_to(&self, target: &str, protocol: &str, message: &Message) -> Result<()> {
         message.headers().validate()?;
-        let cbor = message.to_cbor()?;
+        let cbor = message.encode()?;
         let mut channel = self.open(target, protocol).await?;
         channel.send(&cbor).await?;
         channel.close();
@@ -272,7 +272,7 @@ impl ProtocolHandler for InboxProtocolHandler {
 
             let _ = send.finish();
 
-            let message = match Message::from_cbor(&payload) {
+            let message = match Message::decode(&payload) {
                 Ok(message) => message,
                 Err(err) => {
                     warn!(

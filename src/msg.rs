@@ -134,9 +134,9 @@ impl Headers {
 /// // Verify against sender's document
 /// msg.verify_with_document(&sender.document).unwrap();
 ///
-/// // Serialize to CBOR
-/// let bytes = msg.to_cbor().unwrap();
-/// let restored = Message::from_cbor(&bytes).unwrap();
+/// // Serialize to wire format
+/// let bytes = msg.encode().unwrap();
+/// let restored = Message::decode(&bytes).unwrap();
 /// assert_eq!(msg.id, restored.id);
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -203,14 +203,14 @@ impl Message {
         Ok(message)
     }
 
-    pub fn to_cbor(&self) -> Result<Vec<u8>> {
+    pub fn encode(&self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         ciborium::ser::into_writer(self, &mut out)
             .map_err(|error| MaError::CborEncode(error.to_string()))?;
         Ok(out)
     }
 
-    pub fn from_cbor(bytes: &[u8]) -> Result<Self> {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
         ciborium::de::from_reader(bytes).map_err(|error| MaError::CborDecode(error.to_string()))
     }
 
@@ -454,14 +454,14 @@ impl Envelope {
         Ok(())
     }
 
-    pub fn to_cbor(&self) -> Result<Vec<u8>> {
+    pub fn encode(&self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         ciborium::ser::into_writer(self, &mut out)
             .map_err(|error| MaError::CborEncode(error.to_string()))?;
         Ok(out)
     }
 
-    pub fn from_cbor(bytes: &[u8]) -> Result<Self> {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
         ciborium::de::from_reader(bytes).map_err(|error| MaError::CborDecode(error.to_string()))
     }
 
