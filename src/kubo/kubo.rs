@@ -109,7 +109,7 @@ pub struct IpnsPublishOptions {
 impl Default for IpnsPublishOptions {
     fn default() -> Self {
         Self {
-            timeout: Duration::from_secs(15),
+            timeout: Duration::from_mins(2),
             allow_offline: true,
             lifetime: "8760h".to_string(),
             ttl: None,
@@ -132,7 +132,8 @@ pub async fn wait_for_api(kubo_url: &str, attempts: u32) -> Result<()> {
         .timeout(Duration::from_secs(6))
         .build()?;
 
-    let mut backoff = Duration::from_millis(200);
+    let mut fib_prev = Duration::from_millis(0);
+    let mut fib_curr = Duration::from_millis(200);
     let mut last_err: Option<anyhow::Error> = None;
 
     for attempt in 1..=attempts {
@@ -159,9 +160,10 @@ pub async fn wait_for_api(kubo_url: &str, attempts: u32) -> Result<()> {
                 warn!("kubo readiness {}/{}: {}", attempt, attempts, err);
                 last_err = Some(err);
                 if attempt < attempts {
-                    sleep(backoff).await;
-                    let doubled = backoff.as_millis().saturating_mul(2);
-                    backoff = Duration::from_millis(std::cmp::min(doubled, 5_000) as u64);
+                    sleep(fib_curr).await;
+                    let next_ms = fib_prev.as_millis().saturating_add(fib_curr.as_millis());
+                    fib_prev = fib_curr;
+                    fib_curr = Duration::from_millis(std::cmp::min(next_ms, 5_000) as u64);
                 }
             }
         }
@@ -380,7 +382,8 @@ pub async fn name_publish_with_retry(
         return Err(anyhow!("name publish attempts must be >= 1"));
     }
 
-    let mut backoff = initial_backoff;
+    let mut fib_prev = Duration::from_millis(0);
+    let mut fib_curr = initial_backoff;
     let mut last_err: Option<anyhow::Error> = None;
 
     for attempt in 1..=attempts {
@@ -400,9 +403,10 @@ pub async fn name_publish_with_retry(
                 );
                 last_err = Some(err);
                 if attempt < attempts {
-                    sleep(backoff).await;
-                    let doubled = backoff.as_millis().saturating_mul(2);
-                    backoff = Duration::from_millis(std::cmp::min(doubled, 30_000) as u64);
+                    sleep(fib_curr).await;
+                    let next_ms = fib_prev.as_millis().saturating_add(fib_curr.as_millis());
+                    fib_prev = fib_curr;
+                    fib_curr = Duration::from_millis(std::cmp::min(next_ms, 30_000) as u64);
                 }
             }
         }
@@ -470,7 +474,8 @@ pub async fn name_resolve(kubo_url: &str, path: &str, recursive: bool) -> Result
 
 pub async fn fetch_did_document(kubo_url: &str, did: &Did) -> Result<Document> {
     let ipns_path = format!("/ipns/{}", did.ipns);
-    let mut backoff = Duration::from_millis(150);
+    let mut fib_prev = Duration::from_millis(0);
+    let mut fib_curr = Duration::from_millis(150);
     let mut last_err: Option<anyhow::Error> = None;
     let mut document: Option<Document> = None;
 
@@ -516,9 +521,10 @@ pub async fn fetch_did_document(kubo_url: &str, did: &Did) -> Result<Document> {
         }
 
         if attempt < 4 {
-            sleep(backoff).await;
-            let doubled = backoff.as_millis().saturating_mul(2);
-            backoff = Duration::from_millis(std::cmp::min(doubled, 2_000) as u64);
+            sleep(fib_curr).await;
+            let next_ms = fib_prev.as_millis().saturating_add(fib_curr.as_millis());
+            fib_prev = fib_curr;
+            fib_curr = Duration::from_millis(std::cmp::min(next_ms, 2_000) as u64);
         }
     }
 
