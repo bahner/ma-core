@@ -5,7 +5,9 @@
 //! `ma-core` provides the building blocks for ma-capable endpoints:
 //!
 //! - **DID documents** — create, validate, resolve, and publish `did:ma:` documents
-//!   to IPFS/IPNS (via Kubo on native targets).
+//!   to IPFS/IPNS (via Kubo on native targets). Use [`MaExtension`] to build the
+//!   `ma:` extension field, and [`config::SecretBundle::build_document`] (`config`
+//!   feature) as the single entry point for a complete, signed document.
 //! - **Service inboxes** — bounded, TTL-aware FIFO queues ([`Inbox`])
 //!   for receiving validated messages on named protocol services.
 //! - **Outbound sending** — fire-and-forget delivery of validated [`Message`] objects
@@ -29,7 +31,8 @@
 //! - **`gossip`** — enables internal iroh-gossip broadcast support.
 //! - **`config`** — enables [`Config`], [`SecretBundle`], and [`MaArgs`] for
 //!   YAML-based daemon configuration, encrypted secret bundles, and CLI
-//!   argument parsing.
+//!   argument parsing. Also provides [`config::SecretBundle::build_document`] and
+//!   [`config::SecretBundle::signing_key`] for constructing ready-to-publish DID documents.
 //!
 //! ## Platform support
 //!
@@ -93,8 +96,8 @@ pub(crate) mod ttl_queue;
 
 pub use did::{Did, DID_PREFIX};
 pub use doc::{
-    now_iso_utc, Document, Proof, VerificationMethod, DEFAULT_DID_CONTEXT, DEFAULT_PROOF_PURPOSE,
-    DEFAULT_PROOF_TYPE,
+    now_iso_utc, Document, MaExtension, Proof, VerificationMethod, DEFAULT_DID_CONTEXT,
+    DEFAULT_PROOF_PURPOSE, DEFAULT_PROOF_TYPE,
 };
 pub use error::{Error, MaError, Result};
 pub use identity::{

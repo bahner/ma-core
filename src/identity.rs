@@ -27,20 +27,40 @@ pub struct GeneratedIdentity {
 }
 
 fn build_identity(ipns: &str) -> Result<GeneratedIdentity> {
-    let subject_url = Did::new_url(ipns, None::<String>).map_err(Error::Validation)?;
     let sign_url = Did::new_url(ipns, None::<String>).map_err(Error::Validation)?;
     let enc_url = Did::new_url(ipns, None::<String>).map_err(Error::Validation)?;
 
     let signing_key = SigningKey::generate(sign_url).map_err(Error::Validation)?;
     let encryption_key = EncryptionKey::generate(enc_url).map_err(Error::Validation)?;
 
+    build_identity_from_keys(ipns, &signing_key, &encryption_key)
+}
+
+/// Build a [`GeneratedIdentity`] from caller-supplied signing and encryption keys.
+///
+/// Uses fixed well-known fragments (`"sign"` / `"enc"`) for the verification
+/// method IDs so that the resulting document is identical on every call with
+/// the same inputs — no random nanoids, no per-call divergence.
+///
+/// This is the correct building block when restoring an identity from a
+/// [`SecretBundle`](crate::config::SecretBundle): pass
+/// `bundle.did_signing_key` and `bundle.did_encryption_key` and get back the
+/// same document every time.
+pub(crate) fn build_identity_from_keys(
+    ipns: &str,
+    signing_key: &SigningKey,
+    encryption_key: &EncryptionKey,
+) -> Result<GeneratedIdentity> {
+    let subject_url = Did::new_identity(ipns).map_err(Error::Validation)?;
+
     let mut document = Document::new(&subject_url, &subject_url);
 
+    // Use fixed fragments so the VM IDs are stable across restarts.
     let assertion_vm = VerificationMethod::new(
         subject_url.base_id(),
         subject_url.base_id(),
         signing_key.key_type.clone(),
-        signing_key.did.fragment.as_deref().unwrap_or_default(),
+        "sign",
         signing_key.public_key_multibase.clone(),
     )
     .map_err(Error::Validation)?;
@@ -49,7 +69,7 @@ fn build_identity(ipns: &str) -> Result<GeneratedIdentity> {
         subject_url.base_id(),
         subject_url.base_id(),
         encryption_key.key_type.clone(),
-        encryption_key.did.fragment.as_deref().unwrap_or_default(),
+        "enc",
         encryption_key.public_key_multibase.clone(),
     )
     .map_err(Error::Validation)?;
@@ -64,7 +84,7 @@ fn build_identity(ipns: &str) -> Result<GeneratedIdentity> {
     document.assertion_method = vec![assertion_vm_id];
     document.key_agreement = vec![key_agreement_vm.id.clone()];
     document
-        .sign(&signing_key, &assertion_vm)
+        .sign(signing_key, &assertion_vm)
         .map_err(Error::Validation)?;
 
     Ok(GeneratedIdentity {

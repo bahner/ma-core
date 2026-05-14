@@ -58,6 +58,22 @@ pub trait MaEndpoint: Send + Sync {
         )
     }
 
+    /// Build a [`crate::MaExtension`] pre-populated with this endpoint's
+    /// service strings.
+    ///
+    /// Use this as the starting point when constructing the `ma:` field for a
+    /// DID document. Chain additional builder methods on the returned value
+    /// before passing it to [`crate::config::SecretBundle::build_document`] or
+    /// [`crate::Document::set_ma_extension`]:
+    ///
+    /// ```ignore
+    /// let ma = endpoint.ma_extension().kind("world");
+    /// let document = bundle.build_document(ma)?;
+    /// ```
+    fn ma_extension(&self) -> crate::doc::MaExtension {
+        crate::doc::MaExtension::new().services(self.services())
+    }
+
     /// Fire-and-forget to a target on a specific protocol.
     async fn send_to(&self, target: &str, protocol: &str, message: &Message) -> Result<()>;
 

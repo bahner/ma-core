@@ -153,6 +153,97 @@ impl Proof {
     }
 }
 
+// ─── ma: extension builder ──────────────────────────────────────────────────
+
+/// Fluent builder for the opaque `ma:` IPLD extension field on a [`Document`].
+///
+/// `MaExtension` collects the node type, transport service strings, and any
+/// custom IPLD fields, then produces the [`Ipld`] value ready for
+/// [`Document::set_ma_extension`].
+///
+/// The idiomatic way to populate `ma:` is to start from the endpoint — which
+/// pre-populates services — and chain any additional fields:
+///
+/// ```ignore
+/// // Endpoint pre-populates services; add type and any extras:
+/// let ma = endpoint.ma_extension()
+///     .kind("world");
+///
+/// // Build a complete, signed document in one call:
+/// let document = bundle.build_document(ma)?;
+/// ```
+///
+/// You can also build a `MaExtension` independently and attach it to an
+/// existing document with [`Document::set_ma_extension`] before re-signing.
+#[derive(Debug, Default, Clone)]
+pub struct MaExtension {
+    map: std::collections::BTreeMap<String, Ipld>,
+}
+
+impl MaExtension {
+    /// Create an empty extension builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set `ma["type"]` to identify the kind of node or service.
+    ///
+    /// The key name `"type"` follows the existing convention in the ma ecosystem.
+    #[must_use]
+    pub fn kind(mut self, kind: &str) -> Self {
+        self.map
+            .insert("type".to_string(), Ipld::String(kind.to_string()));
+        self
+    }
+
+    /// Append one transport service string to `ma["services"]`.
+    ///
+    /// Service strings have the form `/iroh/<endpoint-id>/ma/<protocol>/<version>`.
+    #[must_use]
+    pub fn add_service(mut self, service: &str) -> Self {
+        let entry = self
+            .map
+            .entry("services".to_string())
+            .or_insert_with(|| Ipld::List(Vec::new()));
+        if let Ipld::List(list) = entry {
+            list.push(Ipld::String(service.to_string()));
+        }
+        self
+    }
+
+    /// Replace `ma["services"]` with the given list.
+    ///
+    /// Use this (rather than repeated [`Self::add_service`] calls) when you
+    /// already have the full service list, e.g. from [`crate::MaEndpoint::services`].
+    #[must_use]
+    pub fn services(mut self, services: Vec<String>) -> Self {
+        self.map.insert(
+            "services".to_string(),
+            Ipld::List(services.into_iter().map(Ipld::String).collect()),
+        );
+        self
+    }
+
+    /// Set an arbitrary IPLD entry in the extension map.
+    #[must_use]
+    pub fn extra(mut self, key: &str, val: Ipld) -> Self {
+        self.map.insert(key.to_string(), val);
+        self
+    }
+
+    /// Consume the builder and return the final [`Ipld`] value.
+    ///
+    /// Returns [`Ipld::Null`] if no fields have been set (which causes
+    /// [`Document::set_ma_extension`] to clear the `ma` field).
+    pub fn build(self) -> Ipld {
+        if self.map.is_empty() {
+            Ipld::Null
+        } else {
+            Ipld::Map(self.map)
+        }
+    }
+}
+
 fn is_valid_rfc3339_utc(value: &str) -> bool {
     let trimmed = value.trim();
     // Strict enough for ISO-8601 UTC produced by current implementations.
@@ -288,13 +379,34 @@ impl Document {
         }
     }
 
-    /// Set the opaque `ma` extension namespace.
+    /// Set the opaque `ma` extension namespace from a raw [`Ipld`] value.
+    ///
+    /// For the ergonomic, structured way to populate this field, prefer
+    /// [`Document::set_ma_extension`] with a [`MaExtension`] builder.
     pub fn set_ma(&mut self, ma: Ipld) {
         match &ma {
             Ipld::Null => self.ma = None,
             Ipld::Map(m) if m.is_empty() => self.ma = None,
             _ => self.ma = Some(ma),
         }
+    }
+
+    /// Set the `ma` extension field from a [`MaExtension`] builder.
+    ///
+    /// This is the recommended way to populate the `ma:` namespace. Build an
+    /// extension with [`MaExtension`], then call this method before signing
+    /// the document. An empty builder (or one whose [`MaExtension::build`]
+    /// returns [`Ipld::Null`]) clears the field.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let ma = endpoint.ma_extension().kind("world");
+    /// document.set_ma_extension(ma);
+    /// document.sign(&signing_key, &assertion_vm)?;
+    /// ```
+    pub fn set_ma_extension(&mut self, ext: MaExtension) {
+        self.set_ma(ext.build());
     }
 
     /// Clear the `ma` extension namespace.

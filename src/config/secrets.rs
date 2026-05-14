@@ -336,13 +336,83 @@ impl SecretBundle {
         Alphanumeric.sample_string(&mut rand::rngs::OsRng, 43)
     }
 
-    /// Derive the DID identity from this bundle's `ipns_secret_key`.
+    /// Derive the DID identity deterministically from all four bundle keys.
     ///
-    /// Calls [`crate::generate_identity_from_secret`] with the bundle's IPNS
-    /// key so callers do not need to handle the IPNS/PeerId derivation themselves.
+    /// Unlike [`crate::generate_identity_from_secret`] this method uses the
+    /// bundle's own `did_signing_key` and `did_encryption_key` instead of
+    /// generating fresh random keys, so the resulting document is identical
+    /// on every call with the same bundle — safe to use across daemon restarts.
+    ///
+    /// Verification method IDs use fixed fragments `#sign` and `#enc`.
     pub fn generate_identity(&self) -> Result<crate::GeneratedIdentity> {
-        crate::generate_identity_from_secret(self.ipns_secret_key)
+        use crate::{
+            identity::build_identity_from_keys, ipns_from_secret, Did, EncryptionKey, SigningKey,
+        };
+        let ipns = ipns_from_secret(self.ipns_secret_key)
+            .map_err(|e| Error::Secrets(format!("ipns derivation failed: {e}")))?;
+        let sign_did = Did::new_url(&ipns, Some("sign"))
+            .map_err(|e| Error::Secrets(format!("sign did: {e}")))?;
+        let enc_did = Did::new_url(&ipns, Some("enc"))
+            .map_err(|e| Error::Secrets(format!("enc did: {e}")))?;
+        let signing_key = SigningKey::from_private_key_bytes(sign_did, self.did_signing_key)
+            .map_err(|e| Error::Secrets(format!("signing key: {e}")))?;
+        let encryption_key =
+            EncryptionKey::from_private_key_bytes(enc_did, self.did_encryption_key)
+                .map_err(|e| Error::Secrets(format!("encryption key: {e}")))?;
+        build_identity_from_keys(&ipns, &signing_key, &encryption_key)
             .map_err(|e| Error::Secrets(format!("identity generation failed: {e}")))
+    }
+
+    /// Build a complete, signed [`crate::Document`] from this bundle and a
+    /// [`crate::MaExtension`].
+    ///
+    /// This is the recommended single entry point for constructing a
+    /// ready-to-publish DID document:
+    ///
+    /// 1. Generates the deterministic base identity from the bundle keys.
+    /// 2. Applies the caller-supplied extension (services, type, custom fields).
+    /// 3. Re-signs the document so the proof covers the extension data.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let ma = endpoint.ma_extension().kind("world");
+    /// let document = bundle.build_document(ma)?;
+    /// ```
+    pub fn build_document(&self, ext: crate::doc::MaExtension) -> Result<crate::Document> {
+        use crate::{ipns_from_secret, Did, SigningKey};
+        let identity = self.generate_identity()?;
+        let mut document = identity.document;
+        let ipns = ipns_from_secret(self.ipns_secret_key)
+            .map_err(|e| Error::Secrets(format!("ipns derivation: {e}")))?;
+        let sign_did = Did::new_url(&ipns, Some("sign"))
+            .map_err(|e| Error::Secrets(format!("sign did: {e}")))?;
+        let signing_key = SigningKey::from_private_key_bytes(sign_did, self.did_signing_key)
+            .map_err(|e| Error::Secrets(format!("signing key: {e}")))?;
+        let vm = document
+            .get_verification_method_by_id(&document.assertion_method[0].clone())
+            .map_err(|e| Error::Secrets(format!("assertion vm: {e}")))?;
+        let vm = vm.clone();
+        document.set_ma_extension(ext);
+        document
+            .sign(&signing_key, &vm)
+            .map_err(|e| Error::Secrets(format!("sign: {e}")))?;
+        Ok(document)
+    }
+
+    /// Derive the [`crate::SigningKey`] for this bundle.
+    ///
+    /// The returned key matches the `#sign` verification method in any document
+    /// produced by [`Self::build_document`] or [`Self::generate_identity`].
+    /// Use it to sign [`crate::Message`] objects after the document is built.
+    pub fn signing_key(&self) -> Result<crate::SigningKey> {
+        use crate::{ipns_from_secret, Did, SigningKey};
+        let ipns = ipns_from_secret(self.ipns_secret_key)
+            .map_err(|e| Error::Secrets(format!("ipns derivation: {e}")))?;
+        let sign_did = Did::new_url(&ipns, Some("sign"))
+            .map_err(|e| Error::Secrets(format!("sign did: {e}")))?;
+        SigningKey::from_private_key_bytes(sign_did, self.did_signing_key)
+            .map_err(|e| Error::Secrets(format!("signing key: {e}")))
     }
 }
 
