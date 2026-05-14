@@ -7,6 +7,7 @@ use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 
+use cid::Cid;
 use libp2p_identity::PeerId;
 
 use crate::error::{Error, Result};
@@ -100,7 +101,14 @@ pub fn ipns_from_secret(secret: [u8; 32]) -> Result<String> {
     let keypair = libp2p_identity::Keypair::ed25519_from_bytes(secret)
         .map_err(|_| Error::Validation(MaError::InvalidIdentitySecret))?;
     let peer_id = PeerId::from_public_key(&keypair.public());
-    Ok(peer_id.to_string())
+    // libp2p-identity's From<PeerId> for Multihash gives the identity multihash
+    // of the protobuf-encoded public key. Wrap it in a CIDv1 with the libp2p-key
+    // codec (0x72) and encode as base36lower — the standard k51... IPNS format.
+    let cid = Cid::new_v1(0x72, peer_id.into());
+    Ok(multibase::encode(
+        multibase::Base::Base36Lower,
+        cid.to_bytes(),
+    ))
 }
 
 /// Generate a base DID identity with keys and a signed document.
