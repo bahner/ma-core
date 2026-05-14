@@ -39,16 +39,6 @@ provide `ma/ipfs/0.0.1` to publish DID documents on behalf of others.
 - **`publish_did_document_to_kubo`** / **`handle_ipfs_publish`** — lower-level
   publish helpers.
 
-### Iroh startup metadata (`ma.iroh`)
-
-When using iroh transport, update DID metadata from the live endpoint before
-publishing at startup:
-
-1. Start your endpoint backend.
-1. Register required services.
-1. Reconcile `ma.iroh` fields from live endpoint state.
-1. Re-sign and publish only when reconciliation reports changes.
-
 ### DID resolution
 
 - **`DidDocumentResolver` trait** — async DID-to-Document resolution.

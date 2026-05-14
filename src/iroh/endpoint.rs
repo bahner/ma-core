@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use iroh::{
     endpoint::{presets, Connection},
     protocol::{AcceptError, ProtocolHandler, Router},
-    Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey,
+    Endpoint, EndpointAddr, EndpointId, SecretKey,
 };
 use tracing::{debug, warn};
 
@@ -14,13 +14,10 @@ use crate::inbox::Inbox;
 use crate::iroh::channel::Channel;
 use crate::outbox::Outbox;
 use crate::transport::transport_string;
-use crate::{now_iso_utc, Document, Ipld, Message};
+use crate::{Document, Message};
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const MA_IROH_KEY: &str = "iroh";
-const MA_IROH_ENDPOINT_ID_KEY: &str = "endpoint_id";
-const MA_IROH_RELAY_URL_KEY: &str = "relay_url";
 const DEFAULT_MAX_INBOUND_MESSAGE_SIZE: usize = 1024 * 1024;
 
 /// An iroh-backed ma endpoint.
@@ -70,29 +67,6 @@ impl IrohEndpoint {
         self.endpoint.id()
     }
 
-    /// Reconcile `document.ma.iroh` from the live iroh endpoint state.
-    ///
-    /// Returns `Ok(true)` if the document was changed and should be re-published.
-    /// Returns `Ok(false)` when the existing value already matches live state.
-    pub fn reconcile_document_ma_iroh(&self, document: &mut Document) -> Result<bool> {
-        let endpoint_id = self.endpoint.id().to_string();
-        let relay_url = self
-            .endpoint
-            .addr()
-            .relay_urls()
-            .map(std::string::ToString::to_string)
-            .min()
-            .ok_or_else(|| {
-                Error::Transport("iroh endpoint has no relay URL available".to_string())
-            })?;
-
-        Ok(reconcile_document_ma_iroh_fields(
-            document,
-            endpoint_id,
-            relay_url,
-        ))
-    }
-
     /// Open a persistent write-only [`Channel`] to a remote endpoint.
     ///
     /// # Errors
@@ -113,22 +87,6 @@ impl IrohEndpoint {
             .await
             .map_err(|e| Error::Transport(format!("open_bi failed: {e}")))?;
         Ok(Channel::new(connection, send))
-    }
-
-    fn resolve_addr(&self, target: &str) -> Result<EndpointAddr> {
-        let target_id: EndpointId = target
-            .trim()
-            .parse()
-            .map_err(|e| Error::Transport(format!("invalid endpoint id: {e}")))?;
-        let mut addr = EndpointAddr::new(target_id);
-        // Add our own relay URL as a routing hint.
-        // DNS-based address lookup is not available in wasm_browser, so without
-        // a relay hint the connect will time out. Both endpoints use the N0
-        // preset whose relays interconnect, so any N0 relay URL is a valid hint.
-        if let Some(relay_url) = self.endpoint.addr().relay_urls().next() {
-            addr = addr.with_relay_url(relay_url.clone());
-        }
-        Ok(addr)
     }
 
     /// Shut down the endpoint.
@@ -185,11 +143,7 @@ impl IrohEndpoint {
         self.start_router();
     }
 
-    fn resolve_addr_with_route(
-        &self,
-        endpoint_id: &str,
-        route: Option<MaIrohRoute>,
-    ) -> Result<EndpointAddr> {
+    fn resolve_addr(&self, endpoint_id: &str) -> Result<EndpointAddr> {
         let target_id: EndpointId = endpoint_id
             .trim()
             .parse()
@@ -197,71 +151,15 @@ impl IrohEndpoint {
 
         let mut addr = EndpointAddr::new(target_id);
 
-        if let Some(route) = route {
-            if let Some(relay_url) = route.relay_url {
-                addr = addr.with_relay_url(relay_url);
-            }
+        // Add local relay URL as a routing hint.
+        // DNS-based address lookup is not available in wasm_browser, so without
+        // a relay hint the connect will time out. Both endpoints use the N0
+        // preset whose relays interconnect, so any N0 relay URL is a valid hint.
+        if let Some(relay_url) = self.endpoint.addr().relay_urls().next() {
+            addr = addr.with_relay_url(relay_url.clone());
         }
-
-        // Fallback to local relay hint if remote route did not provide one.
-        if addr.relay_urls().next().is_none() {
-            if let Some(relay_url) = self.endpoint.addr().relay_urls().next() {
-                addr = addr.with_relay_url(relay_url.clone());
-            }
-        }
-
         Ok(addr)
     }
-}
-
-#[derive(Debug, Clone)]
-struct MaIrohRoute {
-    relay_url: Option<RelayUrl>,
-}
-
-fn extract_ma_iroh_route(ma: Option<&Ipld>) -> Option<MaIrohRoute> {
-    let iroh = ma.and_then(|ma_root| ma_root.get(MA_IROH_KEY).ok().flatten())?;
-    let iroh_json = serde_json::to_value(iroh).ok()?;
-    let iroh_obj = iroh_json.as_object()?;
-
-    let relay_url = iroh_obj
-        .get(MA_IROH_RELAY_URL_KEY)
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<RelayUrl>().ok());
-
-    Some(MaIrohRoute { relay_url })
-}
-
-fn reconcile_document_ma_iroh_fields(
-    document: &mut Document,
-    endpoint_id: String,
-    relay_url: String,
-) -> bool {
-    let mut ma_root = match &document.ma {
-        Some(Ipld::Map(map)) => map.clone(),
-        _ => BTreeMap::new(),
-    };
-
-    let next = ma_iroh_ipld(endpoint_id, relay_url);
-    let unchanged = ma_root.get(MA_IROH_KEY) == Some(&next);
-    if unchanged {
-        return false;
-    }
-
-    ma_root.insert(MA_IROH_KEY.to_string(), next);
-    document.set_ma(Ipld::Map(ma_root));
-    document.updated_at = now_iso_utc();
-    true
-}
-
-fn ma_iroh_ipld(endpoint_id: String, relay_url: String) -> Ipld {
-    let mut iroh = BTreeMap::new();
-    iroh.insert(
-        MA_IROH_ENDPOINT_ID_KEY.to_string(),
-        Ipld::String(endpoint_id),
-    );
-    iroh.insert(MA_IROH_RELAY_URL_KEY.to_string(), Ipld::String(relay_url));
-    Ipld::Map(iroh)
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
@@ -300,13 +198,12 @@ impl MaEndpoint for IrohEndpoint {
 
     async fn connect_outbox(
         &self,
-        doc: &Document,
+        _doc: &Document,
         endpoint_id: &str,
         did: &str,
         protocol: &str,
     ) -> Result<Outbox> {
-        let route = extract_ma_iroh_route(doc.ma.as_ref());
-        let addr = self.resolve_addr_with_route(endpoint_id, route)?;
+        let addr = self.resolve_addr(endpoint_id)?;
         let channel = self.open_addr(addr, protocol).await?;
         Ok(Outbox::from_transport(
             channel,
@@ -443,11 +340,7 @@ fn message_created_at_secs(created_at: f64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        extract_ma_iroh_route, reconcile_document_ma_iroh_fields, MA_IROH_KEY,
-        MA_IROH_RELAY_URL_KEY,
-    };
-    use crate::{Did, Document, Ipld};
+    use crate::{Did, Document};
     use std::collections::BTreeMap;
 
     fn test_doc() -> Document {
@@ -457,95 +350,6 @@ mod tests {
         )
         .expect("valid did");
         Document::new(&did, &did)
-    }
-
-    #[test]
-    fn reconcile_sets_ma_iroh() {
-        let mut doc = test_doc();
-
-        let changed = reconcile_document_ma_iroh_fields(
-            &mut doc,
-            "abc123".to_string(),
-            "https://relay.example".to_string(),
-        );
-
-        assert!(changed);
-        let ma = doc.ma.expect("ma should be present");
-        let map = match ma {
-            Ipld::Map(map) => map,
-            _ => panic!("ma should be map"),
-        };
-        assert!(map.contains_key(MA_IROH_KEY));
-    }
-
-    #[test]
-    fn reconcile_is_idempotent_after_normalization() {
-        let mut doc = test_doc();
-        let _ = reconcile_document_ma_iroh_fields(
-            &mut doc,
-            "abc123".to_string(),
-            "https://relay.example".to_string(),
-        );
-
-        let changed = reconcile_document_ma_iroh_fields(
-            &mut doc,
-            "abc123".to_string(),
-            "https://relay.example".to_string(),
-        );
-
-        assert!(!changed);
-    }
-
-    #[test]
-    fn reconcile_preserves_other_ma_fields() {
-        let mut doc = test_doc();
-        let mut ma = BTreeMap::new();
-        ma.insert("services".to_string(), Ipld::Map(BTreeMap::new()));
-        doc.set_ma(Ipld::Map(ma));
-
-        let changed = reconcile_document_ma_iroh_fields(
-            &mut doc,
-            "abc123".to_string(),
-            "https://relay.example".to_string(),
-        );
-
-        assert!(changed);
-        let ma = doc.ma.expect("ma should be present");
-        let map = match ma {
-            Ipld::Map(map) => map,
-            _ => panic!("ma should be map"),
-        };
-        assert!(map.contains_key("services"));
-        assert!(map.contains_key(MA_IROH_KEY));
-
-        let iroh = map.get(MA_IROH_KEY).expect("iroh should exist");
-        let iroh_map = match iroh {
-            Ipld::Map(iroh_map) => iroh_map,
-            _ => panic!("iroh should be map"),
-        };
-        assert!(iroh_map.contains_key(MA_IROH_RELAY_URL_KEY));
-    }
-
-    #[test]
-    fn extract_ma_iroh_route_parses_relay_url() {
-        let mut iroh = BTreeMap::new();
-        iroh.insert(
-            MA_IROH_RELAY_URL_KEY.to_string(),
-            Ipld::String("https://relay.example".to_string()),
-        );
-
-        let mut ma = BTreeMap::new();
-        ma.insert(MA_IROH_KEY.to_string(), Ipld::Map(iroh));
-
-        let route = extract_ma_iroh_route(Some(&Ipld::Map(ma))).expect("route should parse");
-        assert!(route.relay_url.is_some());
-    }
-
-    #[test]
-    fn extract_ma_iroh_route_returns_none_without_iroh() {
-        let ma = Ipld::Map(BTreeMap::new());
-        let route = extract_ma_iroh_route(Some(&ma));
-        assert!(route.is_none());
     }
 
     // ─── IrohEndpoint service/router lifecycle tests ─────────────────────────
