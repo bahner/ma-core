@@ -21,16 +21,22 @@ pub const DEFAULT_PROOF_PURPOSE: &str = "assertionMethod";
 pub fn now_iso_utc() -> String {
     #[cfg(target_arch = "wasm32")]
     {
-        return js_sys::Date::new_0()
-            .to_iso_string()
-            .as_string()
-            .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
+        // Use chrono for ISO formatting on wasm
+        use chrono::prelude::*;
+        let now = js_sys::Date::new_0().get_time();
+        let secs = (now / 1000.0) as i64;
+        let nsecs = ((now % 1000.0) * 1_000_000.0) as u32;
+        let dt = Utc.timestamp_opt(secs, nsecs).unwrap();
+        return dt.to_rfc3339_opts(SecondsFormat::Millis, true);
     }
 
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    unix_millis_to_iso(duration.as_secs(), duration.subsec_millis())
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let duration = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        unix_millis_to_iso(duration.as_secs(), duration.subsec_millis())
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
