@@ -348,7 +348,6 @@ fn message_created_at_secs(created_at: f64) -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::{Did, Document};
-    use std::collections::BTreeMap;
 
     fn test_doc() -> Document {
         let did = Did::new_url(

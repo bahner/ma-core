@@ -41,11 +41,12 @@ pub fn now_iso_utc() -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn unix_millis_to_iso(secs: u64, millis: u32) -> String {
     // Howard Hinnant's civil_from_days algorithm.
-    let z = (secs / 86400) as i64 + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
+    let days = i64::try_from(secs / 86_400).unwrap_or(i64::MAX);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = u64::try_from(z - era * 146_097).unwrap_or_default();
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = i64::try_from(yoe).unwrap_or(i64::MAX) + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
@@ -407,6 +408,7 @@ impl Document {
             })
     }
 
+    #[must_use]
     pub fn payload_document(&self) -> Self {
         let mut payload = self.clone();
         payload.proof = Proof::default();
@@ -431,7 +433,7 @@ impl Document {
         }
 
         let signature = signing_key.sign(&self.payload_hash()?);
-        let proof_value = signature_multibase_encode(EDDSA_SIG_CODEC, &signature)?;
+        let proof_value = signature_multibase_encode(EDDSA_SIG_CODEC, &signature);
         self.proof = Proof::new(proof_value, verification_method.id.clone());
         Ok(())
     }
@@ -542,6 +544,48 @@ impl TryFrom<&SigningKey> for VerificationMethod {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn encode_decode_round_trip() {
+        let identity = crate::generate_identity_from_secret([11u8; 32]).expect("identity");
+        let bytes = identity.document.encode().expect("encode");
+        let decoded = Document::decode(&bytes).expect("decode");
+        assert_eq!(decoded, identity.document);
+    }
+
+    #[test]
+    fn try_from_bytes_round_trip() {
+        let identity = crate::generate_identity_from_secret([12u8; 32]).expect("identity");
+        let bytes = identity.document.encode().expect("encode");
+        let decoded = Document::try_from(bytes.as_slice()).expect("try_from bytes");
+        assert_eq!(decoded, identity.document);
+    }
+
+    #[test]
+    fn decode_rejects_invalid_bytes() {
+        let err = Document::decode(b"not dag-cbor").expect_err("invalid bytes");
+        assert!(matches!(err, MaError::CborDecode(_)));
+    }
+
+    #[test]
+    fn payload_document_clears_proof_only() {
+        let identity = crate::generate_identity_from_secret([13u8; 32]).expect("identity");
+        let payload = identity.document.payload_document();
+
+        assert!(payload.proof.is_empty());
+        assert_eq!(payload.id, identity.document.id);
+        assert_eq!(payload.controller, identity.document.controller);
+        assert_eq!(
+            payload.verification_method,
+            identity.document.verification_method
+        );
+        assert_eq!(payload.assertion_method, identity.document.assertion_method);
+        assert_eq!(payload.key_agreement, identity.document.key_agreement);
+        assert_eq!(payload.identity, identity.document.identity);
+        assert_eq!(payload.created_at, identity.document.created_at);
+        assert_eq!(payload.updated_at, identity.document.updated_at);
+        assert_eq!(payload.ma, identity.document.ma);
+    }
 
     #[test]
     fn set_ma_stores_opaque_value() {

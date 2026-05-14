@@ -272,7 +272,80 @@ pub async fn handle_ipfs_publish(
 
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "kubo"))]
 mod tests {
-    use super::normalize_kubo_url;
+    use super::*;
+    use crate::{generate_identity_from_secret, Did, SigningKey};
+
+    fn test_identity(seed: u8) -> crate::GeneratedIdentity {
+        generate_identity_from_secret([seed; 32]).expect("identity")
+    }
+
+    fn test_signing_key(identity: &crate::GeneratedIdentity) -> SigningKey {
+        let sign_url = Did::new_url(&identity.subject_url.ipns, None::<String>).expect("did url");
+        let private_key: [u8; 32] = hex::decode(&identity.signing_private_key_hex)
+            .expect("decode key")
+            .try_into()
+            .expect("private key bytes");
+        SigningKey::from_private_key_bytes(sign_url, private_key).expect("signing key")
+    }
+
+    #[test]
+    fn validate_ipfs_publish_request_accepts_json_request() {
+        let identity = test_identity(31);
+        let signing_key = test_signing_key(&identity);
+        let request = IpfsPublishDidRequest {
+            did_document: identity.document.encode().expect("document bytes"),
+            ipns_private_key_base64: B64.encode(b"private-key"),
+        };
+        let payload = serde_json::to_vec(&request).expect("json payload");
+        let message = Message::new(
+            identity.document.id.clone(),
+            String::new(),
+            CONTENT_TYPE_IPFS_REQUEST,
+            payload,
+            &signing_key,
+        )
+        .expect("message");
+        let encoded = message.to_cbor().expect("message cbor");
+
+        let validated = validate_ipfs_publish_request(&encoded).expect("validated request");
+        assert_eq!(validated.document, identity.document);
+        assert_eq!(
+            validated.request.ipns_private_key_base64,
+            B64.encode(b"private-key")
+        );
+    }
+
+    #[test]
+    fn validate_ipfs_publish_request_rejects_invalid_json_payload() {
+        let identity = test_identity(32);
+        let signing_key = test_signing_key(&identity);
+        let message = Message::new(
+            identity.document.id.clone(),
+            String::new(),
+            CONTENT_TYPE_IPFS_REQUEST,
+            b"not json".to_vec(),
+            &signing_key,
+        )
+        .expect("message");
+        let encoded = message.to_cbor().expect("message cbor");
+
+        let err = validate_ipfs_publish_request(&encoded)
+            .err()
+            .expect("invalid json payload");
+        assert!(err.to_string().contains("invalid IPFS publish payload"));
+    }
+
+    #[test]
+    fn request_json_uses_base64_private_key_field() {
+        let request = IpfsPublishDidRequest {
+            did_document: vec![1, 2, 3],
+            ipns_private_key_base64: "c2VjcmV0".to_string(),
+        };
+        let json = serde_json::to_string(&request).expect("json");
+
+        assert!(json.contains("\"did_document\""));
+        assert!(json.contains("\"ipns_private_key_base64\""));
+    }
 
     #[test]
     fn normalizes_trailing_slash() {

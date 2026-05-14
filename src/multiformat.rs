@@ -29,8 +29,8 @@ pub fn multicodec_decode(encoded: &[u8]) -> Result<(u64, Vec<u8>)> {
     Ok((codec, remainder.to_vec()))
 }
 
-pub fn public_key_multibase_encode(codec: u64, public_key: &[u8]) -> Result<String> {
-    Ok(multibase_encode(&multicodec_encode(codec, public_key)))
+pub fn public_key_multibase_encode(codec: u64, public_key: &[u8]) -> String {
+    multibase_encode(&multicodec_encode(codec, public_key))
 }
 
 pub fn public_key_multibase_decode(input: &str) -> Result<(u64, Vec<u8>)> {
@@ -38,8 +38,8 @@ pub fn public_key_multibase_decode(input: &str) -> Result<(u64, Vec<u8>)> {
     multicodec_decode(&decoded)
 }
 
-pub fn signature_multibase_encode(codec: u64, signature: &[u8]) -> Result<String> {
-    Ok(multibase_encode(&multicodec_encode(codec, signature)))
+pub fn signature_multibase_encode(codec: u64, signature: &[u8]) -> String {
+    multibase_encode(&multicodec_encode(codec, signature))
 }
 
 pub fn signature_multibase_decode(input: &str) -> Result<(u64, Vec<u8>)> {

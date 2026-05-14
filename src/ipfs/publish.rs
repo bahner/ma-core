@@ -284,10 +284,137 @@ pub async fn handle_ipfs_publish(
     })
 }
 
-#[cfg(all(test, not(target_arch = "wasm32"), feature = "kubo"))]
+#[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{generate_identity_from_secret, Did, SigningKey};
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
     use super::normalize_kubo_url;
 
+    fn test_identity(seed: u8) -> crate::GeneratedIdentity {
+        generate_identity_from_secret([seed; 32]).expect("identity")
+    }
+
+    fn test_signing_key(identity: &crate::GeneratedIdentity) -> SigningKey {
+        let sign_url = Did::new_url(&identity.subject_url.ipns, None::<String>).expect("did url");
+        let private_key: [u8; 32] = hex::decode(&identity.signing_private_key_hex)
+            .expect("decode key")
+            .try_into()
+            .expect("private key bytes");
+        SigningKey::from_private_key_bytes(sign_url, private_key).expect("signing key")
+    }
+
+    #[test]
+    fn generate_request_embeds_cbor_document_and_private_key() {
+        let identity = test_identity(21);
+        let payload =
+            generate_ipfs_publish_request(&identity.document, b"secret-key").expect("payload");
+        let request: IpfsPublishDidRequest =
+            ciborium::de::from_reader(payload.as_slice()).expect("decode request");
+
+        assert_eq!(
+            request.did_document,
+            identity.document.encode().expect("document bytes")
+        );
+        assert_eq!(request.ipns_private_key, b"secret-key".to_vec());
+    }
+
+    #[test]
+    fn validate_ipfs_publish_request_accepts_signed_request() {
+        let identity = test_identity(22);
+        let signing_key = test_signing_key(&identity);
+        let payload =
+            generate_ipfs_publish_request(&identity.document, b"private-key").expect("payload");
+        let message = Message::new(
+            identity.document.id.clone(),
+            String::new(),
+            CONTENT_TYPE_IPFS_REQUEST,
+            payload,
+            &signing_key,
+        )
+        .expect("message");
+        let encoded = message.to_cbor().expect("message cbor");
+
+        let validated = validate_ipfs_publish_request(&encoded).expect("validated request");
+        assert_eq!(validated.document, identity.document);
+        assert_eq!(validated.request.ipns_private_key, b"private-key".to_vec());
+    }
+
+    #[test]
+    fn validate_ipfs_publish_request_rejects_wrong_content_type() {
+        let identity = test_identity(23);
+        let signing_key = test_signing_key(&identity);
+        let payload =
+            generate_ipfs_publish_request(&identity.document, b"private-key").expect("payload");
+        let message = Message::new(
+            identity.document.id.clone(),
+            String::new(),
+            "application/x-test",
+            payload,
+            &signing_key,
+        )
+        .expect("message");
+        let encoded = message.to_cbor().expect("message cbor");
+
+        let err = validate_ipfs_publish_request(&encoded)
+            .err()
+            .expect("wrong content type");
+        assert!(err
+            .to_string()
+            .contains("expected application/x-ma-ipfs-request"));
+    }
+
+    #[test]
+    fn validate_ipfs_publish_request_rejects_ipns_mismatch() {
+        let sender_identity = test_identity(24);
+        let document_identity = test_identity(25);
+        let signing_key = test_signing_key(&sender_identity);
+        let payload = generate_ipfs_publish_request(&document_identity.document, b"private-key")
+            .expect("payload");
+        let message = Message::new(
+            sender_identity.document.id.clone(),
+            String::new(),
+            CONTENT_TYPE_IPFS_REQUEST,
+            payload,
+            &signing_key,
+        )
+        .expect("message");
+        let encoded = message.to_cbor().expect("message cbor");
+
+        let err = validate_ipfs_publish_request(&encoded)
+            .err()
+            .expect("ipns mismatch");
+        assert!(err.to_string().contains("does not match document IPNS"));
+    }
+
+    #[test]
+    fn validate_ipfs_publish_request_rejects_invalid_document_bytes() {
+        let identity = test_identity(26);
+        let signing_key = test_signing_key(&identity);
+        let request = IpfsPublishDidRequest {
+            did_document: b"not dag-cbor".to_vec(),
+            ipns_private_key: b"private-key".to_vec(),
+        };
+        let mut payload = Vec::new();
+        ciborium::ser::into_writer(&request, &mut payload).expect("encode request");
+        let message = Message::new(
+            identity.document.id.clone(),
+            String::new(),
+            CONTENT_TYPE_IPFS_REQUEST,
+            payload,
+            &signing_key,
+        )
+        .expect("message");
+        let encoded = message.to_cbor().expect("message cbor");
+
+        let err = validate_ipfs_publish_request(&encoded)
+            .err()
+            .expect("invalid document");
+        assert!(err.to_string().contains("invalid DID document dag-cbor"));
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
     #[test]
     fn normalizes_trailing_slash() {
         assert_eq!(
@@ -296,6 +423,7 @@ mod tests {
         );
     }
 
+    #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
     #[test]
     fn strips_api_v0_suffix() {
         assert_eq!(
@@ -304,6 +432,7 @@ mod tests {
         );
     }
 
+    #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
     #[test]
     fn keeps_custom_base_path() {
         assert_eq!(
@@ -312,11 +441,13 @@ mod tests {
         );
     }
 
+    #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
     #[test]
     fn rejects_empty_url() {
         assert!(normalize_kubo_url("   ").is_err());
     }
 
+    #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
     #[test]
     fn rejects_non_http_scheme() {
         assert!(normalize_kubo_url("ftp://127.0.0.1:5001").is_err());

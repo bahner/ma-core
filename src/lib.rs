@@ -77,8 +77,8 @@ pub mod ipfs;
 #[allow(dead_code)]
 mod iroh;
 pub mod key;
-#[cfg(feature = "kubo")]
-pub mod kubo;
+#[cfg(all(feature = "kubo", not(target_arch = "wasm32")))]
+mod kubo;
 pub mod msg;
 mod multiformat;
 #[cfg(feature = "iroh")]

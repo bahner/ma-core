@@ -39,7 +39,7 @@ pub const EDDSA_SIG_CODEC: u64 = 0xd0ed;
 pub struct SigningKey {
     pub did: Did,
     pub key_type: String,
-    signing_key: Ed25519SigningKey,
+    secret_key: Ed25519SigningKey,
     pub public_key_multibase: String,
 }
 
@@ -47,29 +47,29 @@ impl SigningKey {
     pub fn generate(did: Did) -> Result<Self> {
         let signing_key = Ed25519SigningKey::generate(&mut OsRng);
         let public_key_multibase =
-            public_key_multibase_encode(ED25519_PUB_CODEC, signing_key.verifying_key().as_bytes())?;
+            public_key_multibase_encode(ED25519_PUB_CODEC, signing_key.verifying_key().as_bytes());
 
         Ok(Self {
             did,
             key_type: ASSERTION_METHOD_KEY_TYPE.to_string(),
-            signing_key,
+            secret_key: signing_key,
             public_key_multibase,
         })
     }
 
     #[must_use]
     pub fn sign(&self, data: &[u8]) -> Vec<u8> {
-        self.signing_key.sign(data).to_bytes().to_vec()
+        self.secret_key.sign(data).to_bytes().to_vec()
     }
 
     #[must_use]
     pub fn verifying_key(&self) -> VerifyingKey {
-        self.signing_key.verifying_key()
+        self.secret_key.verifying_key()
     }
 
     #[must_use]
     pub fn private_key_bytes(&self) -> [u8; ed25519_dalek::SECRET_KEY_LENGTH] {
-        self.signing_key.to_bytes()
+        self.secret_key.to_bytes()
     }
 
     pub fn from_private_key_bytes(
@@ -78,12 +78,12 @@ impl SigningKey {
     ) -> Result<Self> {
         let signing_key = Ed25519SigningKey::from_bytes(&private_key);
         let public_key_multibase =
-            public_key_multibase_encode(ED25519_PUB_CODEC, signing_key.verifying_key().as_bytes())?;
+            public_key_multibase_encode(ED25519_PUB_CODEC, signing_key.verifying_key().as_bytes());
 
         Ok(Self {
             did,
             key_type: ASSERTION_METHOD_KEY_TYPE.to_string(),
-            signing_key,
+            secret_key: signing_key,
             public_key_multibase,
         })
     }
@@ -147,7 +147,7 @@ impl EncryptionKey {
         let private_key = StaticSecret::random_from_rng(OsRng);
         let public_key = X25519PublicKey::from(&private_key);
         let public_key_multibase =
-            public_key_multibase_encode(X25519_PUB_CODEC, public_key.as_bytes())?;
+            public_key_multibase_encode(X25519_PUB_CODEC, public_key.as_bytes());
 
         Ok(Self {
             did,
@@ -172,7 +172,7 @@ impl EncryptionKey {
         let private_key = StaticSecret::from(private_key);
         let public_key = X25519PublicKey::from(&private_key);
         let public_key_multibase =
-            public_key_multibase_encode(X25519_PUB_CODEC, public_key.as_bytes())?;
+            public_key_multibase_encode(X25519_PUB_CODEC, public_key.as_bytes());
 
         Ok(Self {
             did,
