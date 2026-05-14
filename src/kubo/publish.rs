@@ -15,7 +15,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use base64::Engine;
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use std::time::Duration;
+use web_time::Duration;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use super::kubo::{dag_put, import_key, list_keys, name_publish_with_retry, IpnsPublishOptions};

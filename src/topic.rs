@@ -1,13 +1,13 @@
-//! Gossip pub/sub topic primitive.
-//!
-//! A [`Topic`] represents a named gossip channel identified by a BLAKE3 hash
-//! of its name string. Topics deliver validated messages to an [`Inbox`].
-//!
-//! See the [pubsub spec](https://github.com/bahner/ma-core-spec/blob/main/pubsub.md)
-//! for the full specification.
+use web_time::{SystemTime, UNIX_EPOCH};
+// Gossip pub/sub topic primitive.
+//
+// A [`Topic`] represents a named gossip channel identified by a BLAKE3 hash
+// of its name string. Topics deliver validated messages to an [`Inbox`].
+//
+// See the [pubsub spec](https://github.com/bahner/ma-core-spec/blob/main/pubsub.md)
+// for the full specification.
 
 use std::collections::HashSet;
-use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::Message;
 

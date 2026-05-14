@@ -2,6 +2,7 @@ use cid::Cid;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use ipld_core::ipld::Ipld;
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
@@ -21,13 +22,11 @@ pub const DEFAULT_PROOF_PURPOSE: &str = "assertionMethod";
 pub fn now_iso_utc() -> String {
     #[cfg(target_arch = "wasm32")]
     {
-        // Use chrono for ISO formatting on wasm
-        use chrono::prelude::*;
-        let now = js_sys::Date::new_0().get_time();
-        let secs = (now / 1000.0) as i64;
-        let nsecs = ((now % 1000.0) * 1_000_000.0) as u32;
-        let dt = Utc.timestamp_opt(secs, nsecs).unwrap();
-        return dt.to_rfc3339_opts(SecondsFormat::Millis, true);
+        // Bruk JS Date for ISO-format
+        return js_sys::Date::new_0()
+            .to_iso_string()
+            .as_string()
+            .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub const MA_IPNS_ALIAS_HASH_PREFIX: &str = "ma-";
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use std::time::Duration;
+use web_time::Duration;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use crate::kubo::{

@@ -673,8 +673,8 @@ impl Config {
     #[must_use]
     pub fn ipfs_gateway_resolver(&self) -> crate::ipfs::IpfsGatewayResolver {
         crate::ipfs::IpfsGatewayResolver::new(self.kubo_rpc_url.clone()).with_cache_ttls(
-            std::time::Duration::from_secs(self.did_resolver_positive_ttl_secs),
-            std::time::Duration::from_secs(self.did_resolver_negative_ttl_secs),
+            web_time::Duration::from_secs(self.did_resolver_positive_ttl_secs),
+            web_time::Duration::from_secs(self.did_resolver_negative_ttl_secs),
         )
     }
 

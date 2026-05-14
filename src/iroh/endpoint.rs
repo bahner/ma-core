@@ -1,4 +1,6 @@
-//! Iroh-backed [`MaEndpoint`] implementation.
+#[cfg(not(target_arch = "wasm32"))]
+use web_time::{SystemTime, UNIX_EPOCH};
+// Iroh-backed [`MaEndpoint`] implementation.
 
 use async_trait::async_trait;
 use iroh::{
@@ -16,7 +18,6 @@ use crate::outbox::Outbox;
 use crate::transport::transport_string;
 use crate::{Document, Message};
 use std::collections::BTreeMap;
-use web_time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_MAX_INBOUND_MESSAGE_SIZE: usize = 1024 * 1024;
 
