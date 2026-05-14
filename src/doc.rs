@@ -214,14 +214,9 @@ fn is_valid_rfc3339_utc(value: &str) -> bool {
 /// // Validate structural correctness
 /// id.document.validate().unwrap();
 ///
-/// // Round-trip through JSON
-/// let json = id.document.marshal().unwrap();
-/// let restored = Document::unmarshal(&json).unwrap();
-/// assert_eq!(id.document, restored);
-///
-/// // Round-trip through CBOR
-/// let cbor = id.document.to_cbor().unwrap();
-/// let restored = Document::from_cbor(&cbor).unwrap();
+/// // Round-trip through the canonical wire format
+/// let bytes = id.document.encode().unwrap();
+/// let restored = Document::decode(&bytes).unwrap();
 /// assert_eq!(id.document, restored);
 /// ```
 ///
@@ -229,7 +224,7 @@ fn is_valid_rfc3339_utc(value: &str) -> bool {
 ///
 /// The `ma` field is an opaque IPLD value for application-defined
 /// extension data. did-ma does not interpret or validate its contents.
-/// Using [`Ipld`] gives native support for CID links and dag-cbor/dag-json
+/// Using [`Ipld`] gives native support for CID links and canonical DAG-CBOR
 /// round-tripping.
 ///
 /// ```
@@ -306,32 +301,20 @@ impl Document {
         self.ma = None;
     }
 
-    pub fn to_cbor(&self) -> Result<Vec<u8>> {
+    /// Encode the DID document to its canonical wire format.
+    ///
+    /// DID documents are always serialized as DAG-CBOR. Use this for
+    /// transport, storage, hashing, signing, and IPFS/IPNS publication.
+    pub fn encode(&self) -> Result<Vec<u8>> {
         serde_ipld_dagcbor::to_vec(self).map_err(|error| MaError::CborEncode(error.to_string()))
     }
 
-    pub fn from_cbor(bytes: &[u8]) -> Result<Self> {
+    /// Decode a DID document from its canonical wire format.
+    ///
+    /// DID documents are always encoded as DAG-CBOR.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
         serde_ipld_dagcbor::from_slice(bytes)
             .map_err(|error| MaError::CborDecode(error.to_string()))
-    }
-
-    pub fn marshal(&self) -> Result<String> {
-        self.to_json()
-    }
-
-    pub fn unmarshal(s: &str) -> Result<Self> {
-        Self::from_json(s)
-    }
-
-    fn to_json(&self) -> Result<String> {
-        let bytes = serde_ipld_dagjson::to_vec(self)
-            .map_err(|error| MaError::JsonEncode(error.to_string()))?;
-        String::from_utf8(bytes).map_err(|error| MaError::JsonEncode(error.to_string()))
-    }
-
-    fn from_json(s: &str) -> Result<Self> {
-        serde_ipld_dagjson::from_slice(s.as_bytes())
-            .map_err(|error| MaError::JsonDecode(error.to_string()))
     }
 
     pub fn add_controller(&mut self, controller: impl Into<String>) -> Result<()> {
@@ -431,7 +414,7 @@ impl Document {
     }
 
     pub fn payload_bytes(&self) -> Result<Vec<u8>> {
-        self.payload_document().to_cbor()
+        self.payload_document().encode()
     }
 
     pub fn payload_hash(&self) -> Result<[u8; 32]> {
@@ -514,6 +497,14 @@ impl Document {
         }
 
         Ok(())
+    }
+}
+
+impl TryFrom<&[u8]> for Document {
+    type Error = MaError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self> {
+        Self::decode(bytes)
     }
 }
 

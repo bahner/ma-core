@@ -26,7 +26,7 @@ use crate::service::CONTENT_TYPE_IPFS_REQUEST;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IpfsPublishDidRequest {
-    pub did_document_json: String,
+    pub did_document: Vec<u8>,
     #[serde(default)]
     pub ipns_private_key_base64: String,
 }
@@ -73,11 +73,10 @@ impl IpfsDidPublisher {
 
     pub async fn publish_document(
         &self,
-        did_document_json: &str,
+        did_document: &[u8],
         ipns_private_key_base64: &str,
     ) -> Result<Option<String>> {
-        publish_did_document_to_kubo(&self.kubo_url, did_document_json, ipns_private_key_base64)
-            .await
+        publish_did_document_to_kubo(&self.kubo_url, did_document, ipns_private_key_base64).await
     }
 
     pub async fn wait_until_ready(&self, attempts: u32) -> Result<()> {
@@ -151,8 +150,8 @@ pub fn validate_ipfs_publish_request(message_cbor: &[u8]) -> Result<ValidatedIpf
     let request: IpfsPublishDidRequest = serde_json::from_slice(&message.content)
         .map_err(|e| anyhow!("invalid IPFS publish payload: {}", e))?;
 
-    let document = Document::unmarshal(&request.did_document_json)
-        .map_err(|e| anyhow!("invalid DID document JSON: {}", e))?;
+    let document = Document::decode(&request.did_document)
+        .map_err(|e| anyhow!("invalid DID document dag-cbor: {}", e))?;
     document
         .validate()
         .map_err(|e| anyhow!("invalid DID document: {}", e))?;
@@ -185,11 +184,11 @@ pub fn validate_ipfs_publish_request(message_cbor: &[u8]) -> Result<ValidatedIpf
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub async fn publish_did_document_to_kubo(
     kubo_url: &str,
-    did_document_json: &str,
+    did_document: &[u8],
     ipns_private_key_base64: &str,
 ) -> Result<Option<String>> {
-    let document = Document::unmarshal(did_document_json)
-        .map_err(|e| anyhow!("invalid DID document JSON: {}", e))?;
+    let document = Document::decode(did_document)
+        .map_err(|e| anyhow!("invalid DID document dag-cbor: {}", e))?;
     let document_did = Did::try_from(document.id.as_str())
         .map_err(|e| anyhow!("invalid document DID '{}': {}", document.id, e))?;
     let document_ipns_id = document_did.ipns.clone();
@@ -258,7 +257,7 @@ pub async fn handle_ipfs_publish(
 
     let cid = publish_did_document_to_kubo(
         kubo_url,
-        &validated.request.did_document_json,
+        &validated.request.did_document,
         &validated.request.ipns_private_key_base64,
     )
     .await?;

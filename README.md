@@ -202,8 +202,11 @@ This section shows a concrete native-only flow for publishing a DID document thr
 - You have a signed CBOR `Message` payload where
   `content_type` is `application/x-ma-ipfs-request`,
   `from` is a DID whose IPNS id matches the DID document id,
-  and `content` is JSON encoded `IpfsPublishDidRequest`.
+  and `content` is CBOR encoded `IpfsPublishDidRequest`.
 - The DID document is valid and signature-verifiable.
+
+The DID document itself is always DAG-CBOR. Use `Document::encode()` and
+`Document::decode()` for serialization.
 
 ### 2. Validate and publish
 

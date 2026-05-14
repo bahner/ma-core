@@ -50,7 +50,7 @@ struct CacheEntry {
 
 #[derive(Clone)]
 enum CacheValue {
-    Hit(String),
+    Hit(Vec<u8>),
     Miss(String),
 }
 
@@ -138,9 +138,9 @@ impl DidDocumentResolver for IpfsGatewayResolver {
         if let Some(cached) = self.read_cache(&did_key, cache_hit_enabled, cache_miss_enabled) {
             return match cached {
                 CacheValue::Hit(body) => {
-                    Document::unmarshal(&body).map_err(|e| crate::error::Error::Resolution {
+                    parse_document_bytes(&body).map_err(|detail| crate::error::Error::Resolution {
                         did: did_key,
-                        detail: format!("cached document parse failed: {e}"),
+                        detail: format!("cached document parse failed: {detail}"),
                     })
                 }
                 CacheValue::Miss(detail) => Err(crate::error::Error::Resolution {
@@ -180,7 +180,7 @@ impl DidDocumentResolver for IpfsGatewayResolver {
                 continue;
             }
 
-            let body = match response.text().await {
+            let body = match response.bytes().await {
                 Ok(body) => body,
                 Err(err) => {
                     if is_localhost_gateway(gateway) {
@@ -191,10 +191,10 @@ impl DidDocumentResolver for IpfsGatewayResolver {
                 }
             };
 
-            let doc = match Document::unmarshal(&body) {
+            let doc = match parse_document_bytes(body.as_ref()) {
                 Ok(doc) => doc,
-                Err(err) => {
-                    errors.push(format!("{url} -> invalid DID document: {err}"));
+                Err(detail) => {
+                    errors.push(format!("{url} -> invalid DID document: {detail}"));
                     continue;
                 }
             };
@@ -204,7 +204,11 @@ impl DidDocumentResolver for IpfsGatewayResolver {
             }
 
             if cache_hit_enabled {
-                self.write_cache(did_key.clone(), CacheValue::Hit(body), now + positive_ttl);
+                self.write_cache(
+                    did_key.clone(),
+                    CacheValue::Hit(body.to_vec()),
+                    now + positive_ttl,
+                );
             }
             return Ok(doc);
         }
@@ -296,4 +300,28 @@ fn push_gateway(gateways: &mut Vec<String>, candidate: &str) {
 
 fn is_localhost_gateway(gateway: &str) -> bool {
     gateway.starts_with("http://127.0.0.1:") || gateway.starts_with("http://localhost:")
+}
+
+fn parse_document_bytes(bytes: &[u8]) -> std::result::Result<Document, String> {
+    Document::decode(bytes).map_err(|err| format!("CBOR decode failed: {err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_document_bytes;
+    use crate::generate_identity_from_secret;
+
+    #[test]
+    fn parses_dag_cbor_documents() {
+        let identity = generate_identity_from_secret([7u8; 32]).expect("identity");
+        let cbor = identity.document.encode().expect("cbor");
+        let parsed = parse_document_bytes(&cbor).expect("parsed cbor");
+        assert_eq!(parsed, identity.document);
+    }
+
+    #[test]
+    fn rejects_non_document_payloads() {
+        let err = parse_document_bytes(b"<html>nope</html>").expect_err("invalid payload");
+        assert!(err.contains("CBOR decode failed"));
+    }
 }

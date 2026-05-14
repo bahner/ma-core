@@ -54,7 +54,7 @@ pub fn generate_ipfs_publish_request(
 ) -> Result<Vec<u8>> {
     let request = IpfsPublishDidRequest {
         did_document: did_document
-            .to_cbor()
+            .encode()
             .map_err(|e| anyhow!("failed to encode DID document as dag-cbor: {}", e))?,
         ipns_private_key: ipns_private_key.to_vec(),
     };
@@ -168,7 +168,7 @@ pub fn validate_ipfs_publish_request(message_cbor: &[u8]) -> Result<ValidatedIpf
     let request: IpfsPublishDidRequest = ciborium::de::from_reader(message.content.as_slice())
         .map_err(|e| anyhow!("invalid IPFS publish payload: {}", e))?;
 
-    let document = Document::from_cbor(&request.did_document)
+    let document = Document::decode(&request.did_document)
         .map_err(|e| anyhow!("invalid DID document dag-cbor: {}", e))?;
     document
         .validate()
@@ -205,7 +205,7 @@ pub async fn publish_did_document_to_kubo(
     did_document: &[u8],
     ipns_private_key: &[u8],
 ) -> Result<Option<String>> {
-    let document = Document::from_cbor(did_document)
+    let document = Document::decode(did_document)
         .map_err(|e| anyhow!("invalid DID document dag-cbor: {}", e))?;
     let document_did = Did::try_from(document.id.as_str())
         .map_err(|e| anyhow!("invalid document DID '{}': {}", document.id, e))?;
