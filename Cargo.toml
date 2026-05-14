@@ -62,6 +62,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], option
 unsigned-varint = "0.8"
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 zeroize = { version = "1", features = ["derive"], optional = true }
+web-time = "1"
 
 [dev-dependencies]
 tokio = { version = "1.52", features = ["macros", "rt"] }
@@ -70,6 +71,7 @@ tokio = { version = "1.52", features = ["macros", "rt"] }
 getrandom = { version = "0.2", features = ["js"] }
 js-sys = "0.3"
 wasm-bindgen = "0.2"
+web-time = "1"
 web-sys = { version = "0.3", features = ["console"] }
 
 [package.metadata.docs.rs]

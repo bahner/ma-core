@@ -8,9 +8,9 @@ use anyhow::{anyhow, Result};
 use reqwest::multipart;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tokio::time::sleep;
 use tracing::warn;
+use web_time::Duration;
 
 // ─── Response types ─────────────────────────────────────────────────────────
 

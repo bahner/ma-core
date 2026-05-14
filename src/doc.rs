@@ -2,8 +2,7 @@ use cid::Cid;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use ipld_core::ipld::Ipld;
 use serde::{Deserialize, Serialize};
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::{SystemTime, UNIX_EPOCH};
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     did::Did,
@@ -28,13 +27,10 @@ pub fn now_iso_utc() -> String {
             .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let duration = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
-        unix_millis_to_iso(duration.as_secs(), duration.subsec_millis())
-    }
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    unix_millis_to_iso(duration.as_secs(), duration.subsec_millis())
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -7,7 +7,7 @@
 //! for the full specification.
 
 use std::collections::HashSet;
-use std::time::{SystemTime, UNIX_EPOCH};
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::Message;
 

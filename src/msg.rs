@@ -6,8 +6,7 @@ use ed25519_dalek::{Signature, Verifier};
 use nanoid::nanoid;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::{SystemTime, UNIX_EPOCH};
+use web_time::{SystemTime, UNIX_EPOCH};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
 use crate::{
@@ -555,13 +554,6 @@ fn validate_message_type(kind: &str) -> Result<()> {
 }
 
 fn now_unix_secs() -> Result<f64> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        // Browser/WASM environments may not support SystemTime::now reliably.
-        return Ok(js_sys::Date::now() / 1000.0);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos() as f64 / 1_000_000_000.0)

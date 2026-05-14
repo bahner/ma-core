@@ -29,7 +29,7 @@ use std::collections::HashSet;
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use std::sync::{Arc, Mutex};
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use std::time::Duration;
+use web_time::Duration;
 
 use crate::Did;
 use cid::Cid;

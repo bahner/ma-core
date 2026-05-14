@@ -16,7 +16,7 @@ use crate::outbox::Outbox;
 use crate::transport::transport_string;
 use crate::{Document, Message};
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use web_time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_MAX_INBOUND_MESSAGE_SIZE: usize = 1024 * 1024;
 
@@ -317,6 +317,12 @@ fn normalize_protocol(input: &str) -> String {
 }
 
 fn now_secs() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        return (js_sys::Date::now() / 1000.0).floor() as u64;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock before UNIX epoch")
