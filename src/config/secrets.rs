@@ -68,6 +68,7 @@ struct BundleJson {
     ipns: String,
     did_signing: String,
     did_encryption: String,
+    created_at: String,
     #[serde(default)]
     extra: HashMap<String, String>,
 }
@@ -115,6 +116,10 @@ pub struct SecretBundle {
     /// DID document encryption key (X25519).
     pub did_encryption_key: [u8; 32],
 
+    /// RFC 3339 UTC timestamp of when this bundle (identity) was first created.
+    /// Set once at generation time and never modified.
+    pub created_at: String,
+
     /// User-defined extra keys. Names must not collide with the four reserved
     /// standard key names.
     extra_keys: HashMap<String, [u8; 32]>,
@@ -139,6 +144,7 @@ impl Clone for SecretBundle {
             ipns_secret_key: self.ipns_secret_key,
             did_signing_key: self.did_signing_key,
             did_encryption_key: self.did_encryption_key,
+            created_at: self.created_at.clone(),
             extra_keys: self.extra_keys.clone(),
         }
     }
@@ -153,6 +159,7 @@ impl SecretBundle {
             ipns_secret_key: [0u8; 32],
             did_signing_key: [0u8; 32],
             did_encryption_key: [0u8; 32],
+            created_at: crate::doc::now_iso_utc(),
             extra_keys: HashMap::new(),
         };
         rng.fill_bytes(&mut b.iroh_secret_key);
@@ -208,6 +215,7 @@ impl SecretBundle {
             ipns: B64.encode(self.ipns_secret_key),
             did_signing: B64.encode(self.did_signing_key),
             did_encryption: B64.encode(self.did_encryption_key),
+            created_at: self.created_at.clone(),
             extra: self
                 .extra_keys
                 .iter()
@@ -243,6 +251,7 @@ impl SecretBundle {
             ipns_secret_key: decode(&wire.ipns, "ipns")?,
             did_signing_key: decode(&wire.did_signing, "did_signing")?,
             did_encryption_key: decode(&wire.did_encryption, "did_encryption")?,
+            created_at: wire.created_at,
             extra_keys,
         })
     }
@@ -359,8 +368,22 @@ impl SecretBundle {
         let encryption_key =
             EncryptionKey::from_private_key_bytes(enc_did, self.did_encryption_key)
                 .map_err(|e| Error::Secrets(format!("encryption key: {e}")))?;
-        build_identity_from_keys(&ipns, &signing_key, &encryption_key)
-            .map_err(|e| Error::Secrets(format!("identity generation failed: {e}")))
+        let mut identity = build_identity_from_keys(&ipns, &signing_key, &encryption_key)
+            .map_err(|e| Error::Secrets(format!("identity generation failed: {e}")))?;
+        // Restore the original creation time — build_identity_from_keys sets
+        // created_at to now(), but it must reflect when the bundle was first
+        // generated, not when the document is rebuilt.
+        identity.document.created_at = self.created_at.clone();
+        let vm = identity
+            .document
+            .get_verification_method_by_id(&identity.document.assertion_method[0].clone())
+            .map_err(|e| Error::Secrets(format!("assertion vm: {e}")))?;
+        let vm = vm.clone();
+        identity
+            .document
+            .sign(&signing_key, &vm)
+            .map_err(|e| Error::Secrets(format!("re-sign after created_at restore: {e}")))?;
+        Ok(identity)
     }
 
     /// Build a complete, signed [`crate::Document`] from this bundle and a
@@ -394,6 +417,8 @@ impl SecretBundle {
             .map_err(|e| Error::Secrets(format!("assertion vm: {e}")))?;
         let vm = vm.clone();
         document.set_ma_extension(ext);
+        // Bump updatedAt to the actual publication time before signing.
+        document.touch();
         document
             .sign(&signing_key, &vm)
             .map_err(|e| Error::Secrets(format!("sign: {e}")))?;
