@@ -22,10 +22,32 @@ use reqwest::Url;
 
 use crate::service::CONTENT_TYPE_IPFS_REQUEST;
 
+// ── Unified wire format ──────────────────────────────────────────────────────
+
+/// Unified CBOR payload for all `application/x-ma-ipfs-request` messages
+/// on `/ma/ipfs/0.0.1`. The `kind` field selects the operation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IpfsPublishDidRequest {
-    pub did_document: Vec<u8>,
-    pub ipns_private_key: Vec<u8>,
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum IpfsRequestPayload {
+    /// Publish a signed DID document to IPFS/IPNS on behalf of the sender.
+    DidDocumentPublish {
+        /// dag-cbor encoded signed [`Document`].
+        document: Vec<u8>,
+        /// Raw 32-byte IPNS signing key (Ed25519 seed). Must be zeroized by receiver.
+        ipns_secret_key: Vec<u8>,
+    },
+    /// Store arbitrary content on IPFS; receiver replies with the resulting CID.
+    Store {
+        content: Vec<u8>,
+        content_type: String,
+    },
+}
+
+fn encode_ipfs_request_payload(payload: &IpfsRequestPayload) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    ciborium::ser::into_writer(payload, &mut buf)
+        .map_err(|e| anyhow!("failed to encode IPFS request payload as CBOR: {}", e))?;
+    Ok(buf)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -39,30 +61,59 @@ pub struct IpfsPublishDidResponse {
 }
 
 pub struct ValidatedIpfsPublish {
-    pub request: IpfsPublishDidRequest,
+    pub document_bytes: Vec<u8>,
+    pub ipns_secret_key: Vec<u8>,
     pub document: Document,
     pub document_did: Did,
 }
 
-/// Build CBOR content bytes for `application/x-ma-ipfs-request`.
+/// Validated store request.
+pub struct ValidatedIpfsStore {
+    pub content: Vec<u8>,
+    pub content_type: String,
+    pub sender_did: String,
+    pub msg_id: String,
+}
+
+/// Unified validated IPFS request — returned by [`validate_ipfs_request`].
+pub enum ValidatedIpfsRequest {
+    DidDocumentPublish(ValidatedIpfsPublish),
+    Store(ValidatedIpfsStore),
+}
+
+/// Build CBOR content bytes for `application/x-ma-ipfs-request` (did-document-publish kind).
 ///
 /// The returned bytes are the payload to place in `Message.content` when
 /// sending to `/ma/ipfs/0.0.1`.
 pub fn generate_ipfs_publish_request(
     did_document: &Document,
-    ipns_private_key: &[u8],
+    ipns_secret_key: &[u8],
 ) -> Result<Vec<u8>> {
-    let request = IpfsPublishDidRequest {
-        did_document: did_document
-            .encode()
-            .map_err(|e| anyhow!("failed to encode DID document as dag-cbor: {}", e))?,
-        ipns_private_key: ipns_private_key.to_vec(),
-    };
+    let document_bytes = did_document
+        .encode()
+        .map_err(|e| anyhow!("failed to encode DID document as dag-cbor: {}", e))?;
+    encode_ipfs_request_payload(&IpfsRequestPayload::DidDocumentPublish {
+        document: document_bytes,
+        ipns_secret_key: ipns_secret_key.to_vec(),
+    })
+}
 
-    let mut payload = Vec::new();
-    ciborium::ser::into_writer(&request, &mut payload)
-        .map_err(|e| anyhow!("failed to encode IPFS publish payload as CBOR: {}", e))?;
-    Ok(payload)
+/// Build a signed `application/x-ma-ipfs-request` message (store kind).
+///
+/// Returns the complete signed [`Message`] ready to send on `/ma/ipfs/0.0.1`.
+pub fn generate_ipfs_store_request(
+    sender_did: &str,
+    publisher_did: &str,
+    content: Vec<u8>,
+    content_type: &str,
+    signing_key: &crate::SigningKey,
+) -> Result<Message> {
+    let payload = encode_ipfs_request_payload(&IpfsRequestPayload::Store {
+        content,
+        content_type: content_type.to_string(),
+    })?;
+    Message::new(sender_did, publisher_did, CONTENT_TYPE_IPFS_REQUEST, payload, signing_key)
+        .map_err(|e| anyhow!("failed to build ipfs-store message: {}", e))
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
@@ -150,53 +201,87 @@ fn normalize_kubo_url(input: &str) -> Result<String> {
     Ok(base)
 }
 
+/// Validate a full did-document-publish request from raw message CBOR bytes.
+///
+/// Used internally by [`IpfsDidPublisher::publish_signed_message`].
 pub fn validate_ipfs_publish_request(message_cbor: &[u8]) -> Result<ValidatedIpfsPublish> {
     let message =
         Message::decode(message_cbor).map_err(|e| anyhow!("invalid signed message: {}", e))?;
+    match validate_ipfs_request(&message)? {
+        ValidatedIpfsRequest::DidDocumentPublish(v) => Ok(v),
+        ValidatedIpfsRequest::Store(_) => Err(anyhow!(
+            "expected did-document-publish kind on /ma/ipfs/0.0.1, got store"
+        )),
+    }
+}
 
+/// Validate any `application/x-ma-ipfs-request` message, dispatching on `kind`.
+///
+/// For `did-document-publish`: verifies the DID document signature and that
+/// the sender IPNS matches the document DID. Returns a [`ValidatedIpfsPublish`].
+///
+/// For `store`: extracts content and sender identity. Returns a [`ValidatedIpfsStore`].
+pub fn validate_ipfs_request(message: &Message) -> Result<ValidatedIpfsRequest> {
     if message.content_type != CONTENT_TYPE_IPFS_REQUEST {
         return Err(anyhow!(
-            "expected {} on ma/ipfs/1, got {}",
+            "expected {} on /ma/ipfs/0.0.1, got {}",
             CONTENT_TYPE_IPFS_REQUEST,
             message.content_type
         ));
     }
 
-    let sender_did = Did::try_from(message.from.as_str())
-        .map_err(|e| anyhow!("invalid sender did '{}': {}", message.from, e))?;
+    let payload: IpfsRequestPayload = ciborium::de::from_reader(message.content.as_slice())
+        .map_err(|e| anyhow!("invalid IPFS request payload: {}", e))?;
 
-    let request: IpfsPublishDidRequest = ciborium::de::from_reader(message.content.as_slice())
-        .map_err(|e| anyhow!("invalid IPFS publish payload: {}", e))?;
+    match payload {
+        IpfsRequestPayload::DidDocumentPublish {
+            document: document_bytes,
+            ipns_secret_key,
+        } => {
+            let sender_did = Did::try_from(message.from.as_str())
+                .map_err(|e| anyhow!("invalid sender did '{}': {}", message.from, e))?;
 
-    let document = Document::decode(&request.did_document)
-        .map_err(|e| anyhow!("invalid DID document dag-cbor: {}", e))?;
-    document
-        .validate()
-        .map_err(|e| anyhow!("invalid DID document: {}", e))?;
-    document
-        .verify()
-        .map_err(|e| anyhow!("DID document signature verification failed: {}", e))?;
+            let document = Document::decode(&document_bytes)
+                .map_err(|e| anyhow!("invalid DID document dag-cbor: {}", e))?;
+            document
+                .validate()
+                .map_err(|e| anyhow!("invalid DID document: {}", e))?;
+            document
+                .verify()
+                .map_err(|e| anyhow!("DID document signature verification failed: {}", e))?;
 
-    let document_did = Did::try_from(document.id.as_str())
-        .map_err(|e| anyhow!("invalid document DID '{}': {}", document.id, e))?;
+            let document_did = Did::try_from(document.id.as_str())
+                .map_err(|e| anyhow!("invalid document DID '{}': {}", document.id, e))?;
 
-    if document_did.ipns != sender_did.ipns {
-        return Err(anyhow!(
-            "sender IPNS '{}' does not match document IPNS '{}'",
-            sender_did.ipns,
-            document_did.ipns
-        ));
+            if document_did.ipns != sender_did.ipns {
+                return Err(anyhow!(
+                    "sender IPNS '{}' does not match document IPNS '{}'",
+                    sender_did.ipns,
+                    document_did.ipns
+                ));
+            }
+
+            message
+                .verify_with_document(&document)
+                .map_err(|e| anyhow!("request signature verification failed: {}", e))?;
+
+            Ok(ValidatedIpfsRequest::DidDocumentPublish(ValidatedIpfsPublish {
+                document_bytes,
+                ipns_secret_key,
+                document,
+                document_did,
+            }))
+        }
+        IpfsRequestPayload::Store {
+            content,
+            content_type,
+        } => Ok(ValidatedIpfsRequest::Store(ValidatedIpfsStore {
+            content,
+            content_type,
+            sender_did: message.from.clone(),
+            msg_id: message.id.clone(),
+        })),
     }
-
-    message
-        .verify_with_document(&document)
-        .map_err(|e| anyhow!("request signature verification failed: {}", e))?;
-
-    Ok(ValidatedIpfsPublish {
-        request,
-        document,
-        document_did,
-    })
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
@@ -279,8 +364,8 @@ pub async fn handle_ipfs_publish(
 
     let cid = publish_did_document_to_kubo(
         kubo_url,
-        &validated.request.did_document,
-        &validated.request.ipns_private_key,
+        &validated.document_bytes,
+        &validated.ipns_secret_key,
     )
     .await?;
 
@@ -318,14 +403,16 @@ mod tests {
         let identity = test_identity(21);
         let payload =
             generate_ipfs_publish_request(&identity.document, b"secret-key").expect("payload");
-        let request: IpfsPublishDidRequest =
+        let request: IpfsRequestPayload =
             ciborium::de::from_reader(payload.as_slice()).expect("decode request");
 
-        assert_eq!(
-            request.did_document,
-            identity.document.encode().expect("document bytes")
-        );
-        assert_eq!(request.ipns_private_key, b"secret-key".to_vec());
+        match request {
+            IpfsRequestPayload::DidDocumentPublish { document, ipns_secret_key } => {
+                assert_eq!(document, identity.document.encode().expect("document bytes"));
+                assert_eq!(ipns_secret_key, b"secret-key".to_vec());
+            }
+            _ => panic!("expected DidDocumentPublish variant"),
+        }
     }
 
     #[test]
@@ -346,7 +433,7 @@ mod tests {
 
         let validated = validate_ipfs_publish_request(&encoded).expect("validated request");
         assert_eq!(validated.document, identity.document);
-        assert_eq!(validated.request.ipns_private_key, b"private-key".to_vec());
+        assert_eq!(validated.ipns_secret_key, b"private-key".to_vec());
     }
 
     #[test]
@@ -400,12 +487,11 @@ mod tests {
     fn validate_ipfs_publish_request_rejects_invalid_document_bytes() {
         let identity = test_identity(26);
         let signing_key = test_signing_key(&identity);
-        let request = IpfsPublishDidRequest {
-            did_document: b"not dag-cbor".to_vec(),
-            ipns_private_key: b"private-key".to_vec(),
-        };
-        let mut payload = Vec::new();
-        ciborium::ser::into_writer(&request, &mut payload).expect("encode request");
+        let payload = encode_ipfs_request_payload(&IpfsRequestPayload::DidDocumentPublish {
+            document: b"not dag-cbor".to_vec(),
+            ipns_secret_key: b"private-key".to_vec(),
+        })
+        .expect("encode request");
         let message = Message::new(
             identity.document.id.clone(),
             String::new(),
@@ -419,7 +505,7 @@ mod tests {
         let err = validate_ipfs_publish_request(&encoded)
             .err()
             .expect("invalid document");
-        assert!(err.to_string().contains("invalid DID document dag-cbor"));
+        assert!(err.to_string().contains("invalid IPFS request payload") || err.to_string().contains("invalid DID document dag-cbor"));
     }
 
     #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]

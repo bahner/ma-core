@@ -13,8 +13,9 @@ pub use gateway_resolver::{DidDocumentResolver, IpfsGatewayResolver};
 
 // Always-available APIs for building and validating IPFS requests (wasm-safe)
 pub use publish::{
-    generate_ipfs_publish_request, validate_ipfs_publish_request, IpfsPublishDidRequest,
-    IpfsPublishDidResponse, ValidatedIpfsPublish, MA_IPNS_ALIAS_HASH_PREFIX,
+    generate_ipfs_publish_request, generate_ipfs_store_request, validate_ipfs_publish_request,
+    validate_ipfs_request, IpfsPublishDidResponse, IpfsRequestPayload, ValidatedIpfsPublish,
+    ValidatedIpfsRequest, ValidatedIpfsStore, MA_IPNS_ALIAS_HASH_PREFIX,
 };
 
 // Native + kubo-specific publishing backend

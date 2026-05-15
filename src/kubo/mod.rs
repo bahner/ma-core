@@ -15,6 +15,9 @@ mod publish;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub(crate) use kubo::{
-    dag_put, import_key, ipfs_add, list_keys, name_publish_with_retry, wait_for_api,
+    dag_put, import_key, list_keys, name_publish_with_retry, wait_for_api,
     IpnsPublishOptions,
 };
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+pub use kubo::{cat_bytes, ipfs_add};

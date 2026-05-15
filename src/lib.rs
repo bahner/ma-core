@@ -82,6 +82,8 @@ mod iroh;
 pub mod key;
 #[cfg(all(feature = "kubo", not(target_arch = "wasm32")))]
 mod kubo;
+#[cfg(all(feature = "kubo", not(target_arch = "wasm32")))]
+pub use kubo::{cat_bytes, ipfs_add};
 pub mod msg;
 mod multiformat;
 #[cfg(feature = "iroh")]
