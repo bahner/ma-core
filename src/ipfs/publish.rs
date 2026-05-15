@@ -237,12 +237,11 @@ pub async fn publish_did_document_to_kubo(
             ));
         }
 
-        let keypair = libp2p_identity::Keypair::ed25519_from_bytes(
-            ipns_private_key
-                .try_into()
-                .map_err(|_| anyhow!("ipns_private_key must be 32 bytes"))?,
-        )
-        .map_err(|e| anyhow!("invalid ipns key: {}", e))?;
+        let raw_key: [u8; 32] = ipns_private_key
+            .try_into()
+            .map_err(|_| anyhow!("ipns_private_key must be 32 bytes"))?;
+        let keypair = libp2p_identity::Keypair::ed25519_from_bytes(raw_key)
+            .map_err(|e| anyhow!("invalid ipns key: {}", e))?;
         let protobuf_key = keypair
             .to_protobuf_encoding()
             .map_err(|e| anyhow!("failed to encode ipns key: {}", e))?;
