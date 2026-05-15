@@ -17,7 +17,8 @@ use crate::iroh::channel::Channel;
 use crate::outbox::Outbox;
 use crate::transport::transport_string;
 use crate::{Document, Message};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Mutex;
 
 const DEFAULT_MAX_INBOUND_MESSAGE_SIZE: usize = 1024 * 1024;
 
@@ -27,6 +28,12 @@ pub struct IrohEndpoint {
     protocols: Vec<String>,
     inboxes: BTreeMap<String, Inbox<Message>>,
     router: Option<Router>,
+    /// Cached open connections keyed by (`endpoint_id`, protocol).
+    ///
+    /// Keeping a `Connection` clone alive prevents iroh from sending
+    /// `APPLICATION_CLOSE` when a `Channel` is dropped after sending,
+    /// which would otherwise race with the receiver's `accept_bi()` loop.
+    connection_cache: Mutex<HashMap<(String, String), Connection>>,
 }
 
 impl IrohEndpoint {
@@ -50,6 +57,7 @@ impl IrohEndpoint {
             protocols: Vec::new(),
             inboxes: BTreeMap::new(),
             router: None,
+            connection_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -90,8 +98,84 @@ impl IrohEndpoint {
         Ok(Channel::new(connection, send))
     }
 
+    /// Like [`open_addr`] but reuses a cached connection when available.
+    ///
+    /// The cache stores a `Connection` clone.  Because iroh `Connection` is an
+    /// `Arc`-backed handle, keeping one clone in the cache prevents the QUIC
+    /// connection from being torn down when the `Channel` returned to the
+    /// caller is later dropped.  This eliminates the race between the sender
+    /// dropping its connection handle and the receiver's `accept_bi()` loop.
+    ///
+    /// If the cached connection is stale (remote restarted, idle timeout, etc.)
+    /// `open_bi()` will return an error; in that case the entry is evicted and
+    /// a fresh connection is established and cached in its place.
+    async fn open_addr_cached(
+        &self,
+        endpoint_id: &str,
+        addr: EndpointAddr,
+        protocol: &str,
+    ) -> Result<Channel> {
+        let cache_key = (endpoint_id.to_string(), protocol.to_string());
+
+        // Try to reuse an existing open connection.
+        let cached = self
+            .connection_cache
+            .lock()
+            .unwrap()
+            .get(&cache_key)
+            .cloned();
+
+        if let Some(conn) = cached {
+            match conn.open_bi().await {
+                Ok((send, _recv)) => {
+                    debug!(endpoint_id, protocol, "reusing cached connection");
+                    return Ok(Channel::new(conn, send));
+                }
+                Err(err) => {
+                    debug!(
+                        endpoint_id,
+                        protocol,
+                        error = %err,
+                        "cached connection stale, reconnecting"
+                    );
+                    self.connection_cache.lock().unwrap().remove(&cache_key);
+                }
+            }
+        }
+
+        // Establish a fresh connection and cache a clone.
+        let connection = self
+            .endpoint
+            .connect(addr, protocol.as_bytes())
+            .await
+            .map_err(|e| Error::Transport(format!("connect failed: {e}")))?;
+        let (send, _recv) = connection
+            .open_bi()
+            .await
+            .map_err(|e| Error::Transport(format!("open_bi failed: {e}")))?;
+
+        self.connection_cache
+            .lock()
+            .unwrap()
+            .insert(cache_key, connection.clone());
+
+        Ok(Channel::new(connection, send))
+    }
+
     /// Shut down the endpoint.
     pub async fn close(self) {
+        // Gracefully close all cached connections before shutting down.
+        let connections: Vec<Connection> = self
+            .connection_cache
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, conn)| conn)
+            .collect();
+        for conn in connections {
+            conn.close(0u32.into(), b"done");
+        }
+
         if let Some(router) = self.router {
             let _ = router.shutdown().await;
             return;
@@ -205,7 +289,7 @@ impl MaEndpoint for IrohEndpoint {
         protocol: &str,
     ) -> Result<Outbox> {
         let addr = self.resolve_addr(endpoint_id)?;
-        let channel = self.open_addr(addr, protocol).await?;
+        let channel = self.open_addr_cached(endpoint_id, addr, protocol).await?;
         Ok(Outbox::from_transport(
             channel,
             did.to_string(),
@@ -216,7 +300,8 @@ impl MaEndpoint for IrohEndpoint {
     async fn send_to(&self, target: &str, protocol: &str, message: &Message) -> Result<()> {
         message.headers().validate()?;
         let cbor = message.encode()?;
-        let mut channel = self.open(target, protocol).await?;
+        let addr = self.resolve_addr(target)?;
+        let mut channel = self.open_addr_cached(target, addr, protocol).await?;
         channel.send(&cbor).await?;
         channel.close();
         Ok(())

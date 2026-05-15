@@ -39,9 +39,14 @@ impl Channel {
     }
 
     /// Close the channel gracefully.
+    ///
+    /// Finishes the send stream to signal end-of-message.  The underlying
+    /// QUIC connection is *not* closed here: its lifetime is managed by
+    /// [`crate::iroh::IrohEndpoint`]'s connection cache, which keeps a clone
+    /// alive so that the remote side can finish reading before the connection
+    /// is torn down.
     pub fn close(mut self) {
         let _ = self.send.finish();
-        self.connection.close(0u32.into(), b"done");
     }
 
     /// Access the underlying iroh connection.
