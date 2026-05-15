@@ -119,9 +119,8 @@ pub use acl::Acl;
 // ─── Re-export service constants ────────────────────────────────────────────
 
 pub use service::{
-    Service, BROADCAST_PROTOCOL, BROADCAST_TOPIC, CONTENT_TYPE_BROADCAST, CONTENT_TYPE_DOC,
-    CONTENT_TYPE_IPFS_REQUEST, CONTENT_TYPE_MESSAGE, INBOX_PROTOCOL, INBOX_PROTOCOL_ID,
-    IPFS_PROTOCOL,
+    Service, BROADCAST_TOPIC, CONTENT_TYPE_BROADCAST, CONTENT_TYPE_DOC, CONTENT_TYPE_IPFS_REQUEST,
+    CONTENT_TYPE_MESSAGE, INBOX_PROTOCOL_ID, IPFS_PROTOCOL_ID, RPC_PROTOCOL_ID,
 };
 
 // ─── Re-export Inbox ────────────────────────────────────────────────────────

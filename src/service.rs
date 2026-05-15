@@ -29,11 +29,10 @@ pub trait Service: Send + Sync {
 // ─── Well-known protocol constants (ma-core scope) ──────────────────────────
 
 pub const INBOX_PROTOCOL_ID: &str = "/ma/inbox/0.0.1";
-pub const INBOX_PROTOCOL: &[u8] = INBOX_PROTOCOL_ID.as_bytes();
-pub const BROADCAST_PROTOCOL: &[u8] = b"/ma/broadcast/0.0.1";
-pub const IPFS_PROTOCOL: &[u8] = b"/ma/ipfs/0.0.1";
+pub const RPC_PROTOCOL_ID: &str = "/ma/rpc/0.0.1";
+pub const IPFS_PROTOCOL_ID: &str = "/ma/ipfs/0.0.1";
 
-/// The well-known broadcast topic string (same path as [`BROADCAST_PROTOCOL`]).
+/// The well-known broadcast topic / protocol string.
 pub const BROADCAST_TOPIC: &str = "/ma/broadcast/0.0.1";
 
 // ─── Content types ──────────────────────────────────────────────────────────
