@@ -8,7 +8,7 @@ use web_time::{SystemTime, UNIX_EPOCH};
 use crate::{
     did::Did,
     error::{MaError, MaResult as Result},
-    key::{EncryptionKey, SigningKey, ED25519_PUB_CODEC, EDDSA_SIG_CODEC, X25519_PUB_CODEC},
+    key::{EncryptionKey, SigningKey, CODEC_ED25519_PUB, CODEC_EDDSA_SIG, CODEC_X25519_PUB},
     multiformat::{
         public_key_multibase_decode, signature_multibase_decode, signature_multibase_encode,
     },
@@ -478,9 +478,9 @@ impl Document {
             .ok_or_else(|| MaError::UnknownVerificationMethod("assertionMethod".to_string()))?;
         let vm = self.get_verification_method_by_id(assertion_id)?;
         let (codec, public_key_bytes) = public_key_multibase_decode(&vm.public_key_multibase)?;
-        if codec != ED25519_PUB_CODEC {
+        if codec != CODEC_ED25519_PUB {
             return Err(MaError::InvalidMulticodec {
-                expected: ED25519_PUB_CODEC,
+                expected: CODEC_ED25519_PUB,
                 actual: codec,
             });
         }
@@ -504,9 +504,9 @@ impl Document {
             .ok_or_else(|| MaError::UnknownVerificationMethod("keyAgreement".to_string()))?;
         let vm = self.get_verification_method_by_id(agreement_id)?;
         let (codec, public_key_bytes) = public_key_multibase_decode(&vm.public_key_multibase)?;
-        if codec != X25519_PUB_CODEC {
+        if codec != CODEC_X25519_PUB {
             return Err(MaError::InvalidMulticodec {
-                expected: X25519_PUB_CODEC,
+                expected: CODEC_X25519_PUB,
                 actual: codec,
             });
         }
@@ -545,7 +545,7 @@ impl Document {
         }
 
         let signature = signing_key.sign(&self.payload_hash()?);
-        let proof_value = signature_multibase_encode(EDDSA_SIG_CODEC, &signature);
+        let proof_value = signature_multibase_encode(CODEC_EDDSA_SIG, &signature);
         self.proof = Proof::new(proof_value, verification_method.id.clone());
         Ok(())
     }
@@ -556,7 +556,7 @@ impl Document {
         }
 
         let (codec, sig_bytes) = signature_multibase_decode(&self.proof.proof_value)?;
-        if codec != EDDSA_SIG_CODEC {
+        if codec != CODEC_EDDSA_SIG {
             return Err(MaError::InvalidDocumentSignature);
         }
         let signature =

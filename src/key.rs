@@ -12,9 +12,9 @@ pub const ASSERTION_METHOD_KEY_TYPE: &str = "Multikey";
 pub const KEY_AGREEMENT_KEY_TYPE: &str = "Multikey";
 
 // https://github.com/multiformats/multicodec/blob/master/table.csv
-pub const X25519_PUB_CODEC: u64 = 0xec;
-pub const ED25519_PUB_CODEC: u64 = 0xed;
-pub const EDDSA_SIG_CODEC: u64 = 0xd0ed;
+pub const CODEC_X25519_PUB: u64 = 0xec;
+pub const CODEC_ED25519_PUB: u64 = 0xed;
+pub const CODEC_EDDSA_SIG: u64 = 0xd0ed;
 
 /// Ed25519 signing key for document proofs and message signatures.
 ///
@@ -47,7 +47,7 @@ impl SigningKey {
     pub fn generate(did: Did) -> Result<Self> {
         let signing_key = Ed25519SigningKey::generate(&mut OsRng);
         let public_key_multibase =
-            public_key_multibase_encode(ED25519_PUB_CODEC, signing_key.verifying_key().as_bytes());
+            public_key_multibase_encode(CODEC_ED25519_PUB, signing_key.verifying_key().as_bytes());
 
         Ok(Self {
             did,
@@ -78,7 +78,7 @@ impl SigningKey {
     ) -> Result<Self> {
         let signing_key = Ed25519SigningKey::from_bytes(&private_key);
         let public_key_multibase =
-            public_key_multibase_encode(ED25519_PUB_CODEC, signing_key.verifying_key().as_bytes());
+            public_key_multibase_encode(CODEC_ED25519_PUB, signing_key.verifying_key().as_bytes());
 
         Ok(Self {
             did,
@@ -96,9 +96,9 @@ impl SigningKey {
         }
 
         let (codec, key_bytes) = public_key_multibase_decode(&self.public_key_multibase)?;
-        if codec != ED25519_PUB_CODEC {
+        if codec != CODEC_ED25519_PUB {
             return Err(MaError::InvalidMulticodec {
-                expected: ED25519_PUB_CODEC,
+                expected: CODEC_ED25519_PUB,
                 actual: codec,
             });
         }
@@ -147,7 +147,7 @@ impl EncryptionKey {
         let private_key = StaticSecret::random_from_rng(OsRng);
         let public_key = X25519PublicKey::from(&private_key);
         let public_key_multibase =
-            public_key_multibase_encode(X25519_PUB_CODEC, public_key.as_bytes());
+            public_key_multibase_encode(CODEC_X25519_PUB, public_key.as_bytes());
 
         Ok(Self {
             did,
@@ -172,7 +172,7 @@ impl EncryptionKey {
         let private_key = StaticSecret::from(private_key);
         let public_key = X25519PublicKey::from(&private_key);
         let public_key_multibase =
-            public_key_multibase_encode(X25519_PUB_CODEC, public_key.as_bytes());
+            public_key_multibase_encode(CODEC_X25519_PUB, public_key.as_bytes());
 
         Ok(Self {
             did,
@@ -191,9 +191,9 @@ impl EncryptionKey {
         }
 
         let (codec, key_bytes) = public_key_multibase_decode(&self.public_key_multibase)?;
-        if codec != X25519_PUB_CODEC {
+        if codec != CODEC_X25519_PUB {
             return Err(MaError::InvalidMulticodec {
-                expected: X25519_PUB_CODEC,
+                expected: CODEC_X25519_PUB,
                 actual: codec,
             });
         }

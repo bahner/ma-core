@@ -38,7 +38,7 @@ impl<T> Inbox<T> {
 
     /// Push an item with a computed expiry timestamp.
     ///
-    /// `expires_at` should be `message.created_at + message.ttl`.
+    /// `expires_at` should be `message.exp / 1_000_000_000`.
     /// Pass `expires_at = 0` for items that never expire.
     ///
     /// Used by endpoint implementations and for local in-process delivery

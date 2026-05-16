@@ -107,13 +107,15 @@ pub use identity::{
 };
 pub use ipld_core::ipld::Ipld;
 pub use key::{
-    EncryptionKey, SigningKey, ASSERTION_METHOD_KEY_TYPE, ED25519_PUB_CODEC, EDDSA_SIG_CODEC,
-    KEY_AGREEMENT_KEY_TYPE, X25519_PUB_CODEC,
+    EncryptionKey, SigningKey, ASSERTION_METHOD_KEY_TYPE, CODEC_ED25519_PUB, CODEC_EDDSA_SIG,
+    KEY_AGREEMENT_KEY_TYPE, CODEC_X25519_PUB,
 };
 pub use msg::{
-    Envelope, Headers, Message, ReplayGuard, DEFAULT_MAX_CLOCK_SKEW_SECS, DEFAULT_MESSAGE_TTL_SECS,
-    DEFAULT_REPLAY_WINDOW_SECS, MESSAGE_PREFIX,
+    decode_content, encode_content, Envelope, Headers, Message, ReplayGuard,
+    DEFAULT_MAX_CLOCK_SKEW_SECS, DEFAULT_MESSAGE_TTL_SECS, DEFAULT_REPLAY_WINDOW_SECS,
+    MESSAGE_PREFIX,
 };
+pub use multiformat::{CODEC_DAG_CBOR, CODEC_DAG_JSON, CODEC_IDENTITY, CODEC_RAW};
 
 #[cfg(feature = "acl")]
 pub use acl::Acl;

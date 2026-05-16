@@ -2,6 +2,14 @@ use unsigned_varint::{decode, encode};
 
 use crate::error::{MaError, MaResult as Result};
 
+// Well-known multicodec codec identifiers for payload encoding.
+// Key/signature codecs live in key.rs.
+// Source: https://github.com/multiformats/multicodec/blob/master/table.csv
+pub const CODEC_IDENTITY: u64 = 0x00;
+pub const CODEC_RAW: u64 = 0x55;
+pub const CODEC_DAG_CBOR: u64 = 0x71;
+pub const CODEC_DAG_JSON: u64 = 0x0129;
+
 pub fn multibase_encode(data: &[u8]) -> String {
     multibase::encode(multibase::Base::Base58Btc, data)
 }

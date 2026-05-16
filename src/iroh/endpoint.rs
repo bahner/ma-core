@@ -14,7 +14,7 @@ use crate::endpoint::{MaEndpoint, DEFAULT_INBOX_CAPACITY};
 use crate::error::{Error, Result};
 use crate::inbox::Inbox;
 use crate::iroh::channel::Channel;
-use crate::outbox::Outbox;
+use crate::outbox::{Outbox, OutboxWire};
 use crate::transport::transport_string;
 use crate::{Document, Message};
 use std::collections::{BTreeMap, HashMap};
@@ -332,6 +332,18 @@ impl MaEndpoint for IrohEndpoint {
         did: &str,
         protocol: &str,
     ) -> Result<Outbox> {
+        if endpoint_id == self.id() {
+            let normalized = normalize_protocol(protocol);
+            let inbox = self
+                .inboxes
+                .get(&normalized)
+                .ok_or_else(|| Error::NoInboxTransport(format!("no local inbox for {protocol}")))?;
+            return Ok(Outbox::from_transport(
+                LoopbackWire { inbox: inbox.clone() },
+                did.to_string(),
+                protocol.to_string(),
+            ));
+        }
         let addr = self.resolve_addr(endpoint_id)?;
         let channel = self.open_addr_cached(endpoint_id, addr, protocol).await?;
         Ok(Outbox::from_transport(
@@ -343,6 +355,16 @@ impl MaEndpoint for IrohEndpoint {
 
     async fn send_to(&self, target: &str, protocol: &str, message: &Message) -> Result<()> {
         message.headers().validate()?;
+        if target == self.id() {
+            let normalized = normalize_protocol(protocol);
+            let inbox = self
+                .inboxes
+                .get(&normalized)
+                .ok_or_else(|| Error::NoInboxTransport(format!("no local inbox for {protocol}")))?;
+            let expires_at = if message.exp == 0 { 0 } else { message.exp / 1_000_000_000 };
+            inbox.push(now_secs(), expires_at, message.clone());
+            return Ok(());
+        }
         let cbor = message.encode()?;
         let addr = self.resolve_addr(target)?;
         let mut channel = self.open_addr_cached(target, addr, protocol).await?;
@@ -354,6 +376,31 @@ impl MaEndpoint for IrohEndpoint {
     async fn close(&mut self) {
         IrohEndpoint::close(self).await;
     }
+}
+
+/// Delivers a message directly into a local [`Inbox`] without going through
+/// the iroh transport layer.
+///
+/// iroh rejects QUIC connections where the target is the sender's own endpoint
+/// ID. For self-addressed messages we bypass the network entirely and push
+/// straight into the registered inbox — which is both correct per Hewitt's
+/// actor model and more efficient than a loopback network hop.
+#[derive(Debug)]
+struct LoopbackWire {
+    inbox: Inbox<Message>,
+}
+
+#[async_trait]
+impl OutboxWire for LoopbackWire {
+    async fn send_payload(&mut self, payload: &[u8]) -> Result<()> {
+        let message = Message::decode(payload)?;
+        message.headers().validate()?;
+        let expires_at = if message.exp == 0 { 0 } else { message.exp / 1_000_000_000 };
+        self.inbox.push(now_secs(), expires_at, message);
+        Ok(())
+    }
+
+    fn close_box(self: Box<Self>) {}
 }
 
 #[derive(Debug, Clone)]
@@ -428,10 +475,10 @@ impl ProtocolHandler for InboxProtocolHandler {
                 continue;
             }
 
-            let expires_at = if message.ttl == 0 {
+            let expires_at = if message.exp == 0 {
                 0
             } else {
-                message_created_at_secs(message.created_at).saturating_add(message.ttl)
+                message.exp / 1_000_000_000
             };
 
             self.inbox.push(now_secs(), expires_at, message);

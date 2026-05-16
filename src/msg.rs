@@ -24,8 +24,19 @@ pub const DEFAULT_REPLAY_WINDOW_SECS: u64 = 120;
 pub const DEFAULT_MAX_CLOCK_SKEW_SECS: u64 = 30;
 pub const DEFAULT_MESSAGE_TTL_SECS: u64 = 3600;
 
-fn default_message_ttl_secs() -> u64 {
-    DEFAULT_MESSAGE_TTL_SECS
+/// Prefix `payload` with a multicodec varint so the codec is self-describing.
+/// Common codec values: `CODEC_IDENTITY` (0x00) raw bytes, `CODEC_DAG_CBOR` (0x71), `CODEC_RAW` (0x55).
+/// Use `CODEC_IDENTITY` for plain text — backward-compatible with receivers that treat
+/// `content` as raw bytes.
+pub fn encode_content(codec: u64, payload: &[u8]) -> Vec<u8> {
+    crate::multiformat::multicodec_encode(codec, payload)
+}
+
+/// Peel the multicodec varint prefix from `content` bytes.
+/// Returns `(codec, payload)`. Legacy messages without a prefix should be
+/// treated as codec `0x00` (identity/raw bytes).
+pub fn decode_content(content: &[u8]) -> crate::error::MaResult<(u64, Vec<u8>)> {
+    crate::multiformat::multicodec_decode(content)
 }
 
 #[must_use]
@@ -48,8 +59,8 @@ pub struct Headers {
     pub to: String,
     #[serde(rename = "createdAt")]
     pub created_at: f64,
-    #[serde(default = "default_message_ttl_secs")]
-    pub ttl: u64,
+    #[serde(default)]
+    pub exp: u64,
     #[serde(rename = "contentType")]
     pub content_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "replyTo")]
@@ -85,20 +96,14 @@ impl Headers {
                     return Err(MaError::MessageRequiresRecipient);
                 }
                 Did::validate(&self.to).map_err(|_| MaError::InvalidRecipient)?;
-                if self.from == self.to {
-                    return Err(MaError::SameActor);
-                }
             }
             _ => {
                 if !recipient_is_empty {
                     Did::validate(&self.to).map_err(|_| MaError::InvalidRecipient)?;
-                    if self.from == self.to {
-                        return Err(MaError::SameActor);
-                    }
                 }
             }
         }
-        validate_message_freshness(self.created_at, self.ttl)?;
+        validate_message_freshness(self.created_at, self.exp)?;
 
         Ok(())
     }
@@ -153,8 +158,8 @@ pub struct Message {
     pub to: String,
     #[serde(rename = "createdAt")]
     pub created_at: f64,
-    #[serde(default = "default_message_ttl_secs")]
-    pub ttl: u64,
+    #[serde(default)]
+    pub exp: u64,
     #[serde(rename = "contentType")]
     pub content_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "replyTo")]
@@ -172,24 +177,25 @@ impl Message {
         content: Vec<u8>,
         signing_key: &SigningKey,
     ) -> Result<Self> {
-        Self::new_with_ttl(
+        let exp = now_unix_nanos()? + DEFAULT_MESSAGE_TTL_SECS * 1_000_000_000;
+        Self::new_with_exp(
             from,
             to,
             message_type,
             content_type,
             content,
-            DEFAULT_MESSAGE_TTL_SECS,
+            exp,
             signing_key,
         )
     }
 
-    pub fn new_with_ttl(
+    pub fn new_with_exp(
         from: impl Into<String>,
         to: impl Into<String>,
         message_type: impl Into<String>,
         content_type: impl Into<String>,
         content: Vec<u8>,
-        ttl: u64,
+        exp: u64,
         signing_key: &SigningKey,
     ) -> Result<Self> {
         let mut message = Self {
@@ -199,7 +205,7 @@ impl Message {
             from: from.into(),
             to: to.into(),
             created_at: now_unix_secs()?,
-            ttl,
+            exp,
             content_type: content_type.into(),
             reply_to: None,
             content,
@@ -232,7 +238,7 @@ impl Message {
             from: self.from.clone(),
             to: self.to.clone(),
             created_at: self.created_at,
-            ttl: self.ttl,
+            exp: self.exp,
             content_type: self.content_type.clone(),
             reply_to: self.reply_to.clone(),
             content_hash: content_hash(&self.content),
@@ -335,7 +341,7 @@ impl Message {
             from: headers.from,
             to: headers.to,
             created_at: headers.created_at,
-            ttl: headers.ttl,
+            exp: headers.exp,
             content_type: headers.content_type,
             reply_to: headers.reply_to,
             content: Vec::new(),
@@ -436,7 +442,7 @@ impl ReplayGuard {
 ///     bob_enc_url,
 ///     hex::decode(&bob.encryption_private_key_hex).unwrap().try_into().unwrap(),
 /// ).unwrap();
-/// let decrypted = envelope.open(&bob.document, &bob_enc_key, &alice.document).unwrap();
+/// let decrypted = envelope.open(&bob_enc_key, &alice.document).unwrap();
 /// assert_eq!(decrypted.content, b"secret");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -479,15 +485,10 @@ impl Envelope {
 
     pub fn open(
         &self,
-        recipient_document: &Document,
         recipient_key: &EncryptionKey,
         sender_document: &Document,
     ) -> Result<Message> {
         self.verify()?;
-
-        if recipient_document.id == sender_document.id {
-            return Err(MaError::SameActor);
-        }
 
         let shared_secret = compute_shared_secret(&self.ephemeral_key, recipient_key)?;
         let headers = self.decrypt_headers(&shared_secret)?;
@@ -502,16 +503,11 @@ impl Envelope {
 
     pub fn open_with_replay_guard(
         &self,
-        recipient_document: &Document,
         recipient_key: &EncryptionKey,
         sender_document: &Document,
         replay_guard: &mut ReplayGuard,
     ) -> Result<Message> {
         self.verify()?;
-
-        if recipient_document.id == sender_document.id {
-            return Err(MaError::SameActor);
-        }
 
         let shared_secret = compute_shared_secret(&self.ephemeral_key, recipient_key)?;
         let headers = self.decrypt_headers(&shared_secret)?;
@@ -573,18 +569,26 @@ fn now_unix_secs() -> Result<f64> {
         .map_err(|_| MaError::InvalidMessageTimestamp)
 }
 
-fn validate_message_freshness(created_at: f64, ttl: u64) -> Result<()> {
+fn now_unix_nanos() -> Result<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .map_err(|_| MaError::InvalidMessageTimestamp)
+}
+
+fn validate_message_freshness(created_at: f64, exp: u64) -> Result<()> {
     let now = now_unix_secs()?;
 
     if created_at > now + DEFAULT_MAX_CLOCK_SKEW_SECS as f64 {
         return Err(MaError::MessageFromFuture);
     }
 
-    if ttl == 0 {
-        return Ok(());
+    if exp == 0 {
+        return Ok(()); // 0 = never expires
     }
 
-    if now - created_at > ttl as f64 {
+    let exp_secs = exp as f64 / 1_000_000_000.0;
+    if now > exp_secs + DEFAULT_MAX_CLOCK_SKEW_SECS as f64 {
         return Err(MaError::MessageTooOld);
     }
 
@@ -795,7 +799,7 @@ mod tests {
             .enclose_for(&recipient_document)
             .expect("message encloses");
         let opened = envelope
-            .open(&recipient_document, &recipient_encryption, &sender_document)
+            .open(&recipient_encryption, &sender_document)
             .expect("envelope opens");
 
         assert_eq!(opened.content, b"look");
@@ -835,6 +839,8 @@ mod tests {
         .expect("message creation");
 
         message.created_at = 0.0;
+        message.exp = 1; // 1 ns epoch — well in the past
+        message.sign(&sender_signing).expect("re-sign with past timestamps");
         let result = message.verify_with_document(&sender_document);
         assert!(matches!(result, Err(MaError::MessageTooOld)));
     }
@@ -863,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn ttl_zero_disables_expiration() {
+    fn exp_zero_disables_expiration() {
         let (sender_signing, _, sender_document, _, _, recipient_document) = fixture_documents();
         let mut message = Message::new(
             sender_document.id.clone(),
@@ -876,12 +882,12 @@ mod tests {
         .expect("message creation");
 
         message.created_at = 0.0;
-        message.ttl = 0;
-        message.sign(&sender_signing).expect("re-sign with ttl=0");
+        message.exp = 0; // 0 = never expires
+        message.sign(&sender_signing).expect("re-sign with exp=0");
 
         message
             .verify_with_document(&sender_document)
-            .expect("ttl=0 should bypass max-age rejection");
+            .expect("exp=0 should bypass expiration check");
     }
 
     #[test]
@@ -928,7 +934,6 @@ mod tests {
 
         envelope
             .open_with_replay_guard(
-                &recipient_document,
                 &recipient_encryption,
                 &sender_document,
                 &mut replay_guard,
@@ -936,7 +941,6 @@ mod tests {
             .expect("first delivery accepted");
 
         let second = envelope.open_with_replay_guard(
-            &recipient_document,
             &recipient_encryption,
             &sender_document,
             &mut replay_guard,

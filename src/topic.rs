@@ -132,10 +132,10 @@ impl Topic {
         }
 
         let now = now_secs();
-        let expires_at = if message.ttl == 0 {
+        let expires_at = if message.exp == 0 {
             0
         } else {
-            message_created_at_secs(message.created_at).saturating_add(message.ttl)
+            message.exp / 1_000_000_000
         };
 
         let Some(inbox) = self.inbox.as_mut() else {
@@ -202,31 +202,15 @@ impl Topic {
             return false;
         }
 
-        // §1.4 rule 4: TTL check.
-        if message.ttl > 0 {
-            let expires_at =
-                message_created_at_secs(message.created_at).saturating_add(message.ttl);
+        // §1.4 rule 4: expiry check.
+        if message.exp > 0 {
+            let expires_at = message.exp / 1_000_000_000;
             if expires_at <= now_secs() {
                 return false;
             }
         }
 
         true
-    }
-}
-
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss
-)]
-fn message_created_at_secs(created_at: f64) -> u64 {
-    if !created_at.is_finite() || created_at <= 0.0 {
-        0
-    } else if created_at >= u64::MAX as f64 {
-        u64::MAX
-    } else {
-        created_at.floor() as u64
     }
 }
 
