@@ -339,7 +339,9 @@ impl MaEndpoint for IrohEndpoint {
                 .get(&normalized)
                 .ok_or_else(|| Error::NoInboxTransport(format!("no local inbox for {protocol}")))?;
             return Ok(Outbox::from_transport(
-                LoopbackWire { inbox: inbox.clone() },
+                LoopbackWire {
+                    inbox: inbox.clone(),
+                },
                 did.to_string(),
                 protocol.to_string(),
             ));
@@ -361,7 +363,11 @@ impl MaEndpoint for IrohEndpoint {
                 .inboxes
                 .get(&normalized)
                 .ok_or_else(|| Error::NoInboxTransport(format!("no local inbox for {protocol}")))?;
-            let expires_at = if message.exp == 0 { 0 } else { message.exp / 1_000_000_000 };
+            let expires_at = if message.exp == 0 {
+                0
+            } else {
+                message.exp / 1_000_000_000
+            };
             inbox.push(now_secs(), expires_at, message.clone());
             return Ok(());
         }
@@ -395,7 +401,11 @@ impl OutboxWire for LoopbackWire {
     async fn send_payload(&mut self, payload: &[u8]) -> Result<()> {
         let message = Message::decode(payload)?;
         message.headers().validate()?;
-        let expires_at = if message.exp == 0 { 0 } else { message.exp / 1_000_000_000 };
+        let expires_at = if message.exp == 0 {
+            0
+        } else {
+            message.exp / 1_000_000_000
+        };
         self.inbox.push(now_secs(), expires_at, message);
         Ok(())
     }

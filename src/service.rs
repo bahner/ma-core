@@ -38,6 +38,8 @@ pub const BROADCAST_TOPIC: &str = "/ma/broadcast/0.0.1";
 // ─── Message types (routing / dispatch category) ────────────────────────────
 
 pub const MESSAGE_TYPE_BROADCAST: &str = "application/x-ma-broadcast";
+pub const MESSAGE_TYPE_CHAT: &str = "application/x-ma-chat";
+pub const MESSAGE_TYPE_EMOTE: &str = "application/x-ma-emote";
 pub const MESSAGE_TYPE_MESSAGE: &str = "application/x-ma-message";
 pub const MESSAGE_TYPE_IPFS_REQUEST: &str = "application/x-ma-ipfs-request";
 pub const MESSAGE_TYPE_IPFS_STORE: &str = "application/x-ma-ipfs-store";

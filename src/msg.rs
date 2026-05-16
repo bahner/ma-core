@@ -840,7 +840,9 @@ mod tests {
 
         message.created_at = 0.0;
         message.exp = 1; // 1 ns epoch — well in the past
-        message.sign(&sender_signing).expect("re-sign with past timestamps");
+        message
+            .sign(&sender_signing)
+            .expect("re-sign with past timestamps");
         let result = message.verify_with_document(&sender_document);
         assert!(matches!(result, Err(MaError::MessageTooOld)));
     }
@@ -933,11 +935,7 @@ mod tests {
         let mut replay_guard = ReplayGuard::default();
 
         envelope
-            .open_with_replay_guard(
-                &recipient_encryption,
-                &sender_document,
-                &mut replay_guard,
-            )
+            .open_with_replay_guard(&recipient_encryption, &sender_document, &mut replay_guard)
             .expect("first delivery accepted");
 
         let second = envelope.open_with_replay_guard(
