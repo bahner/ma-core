@@ -19,6 +19,7 @@ use crate::transport::transport_string;
 use crate::{Document, Message};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 
 const DEFAULT_MAX_INBOUND_MESSAGE_SIZE: usize = 1024 * 1024;
 
@@ -34,6 +35,13 @@ pub struct IrohEndpoint {
     /// `APPLICATION_CLOSE` when a `Channel` is dropped after sending,
     /// which would otherwise race with the receiver's `accept_bi()` loop.
     connection_cache: Mutex<HashMap<(String, String), Connection>>,
+    /// Serialises concurrent fresh-connection attempts to the same peer.
+    ///
+    /// Multiple tasks that simultaneously find the cache empty would otherwise
+    /// all try to `connect()` in parallel.  The second task to acquire this
+    /// lock re-checks the cache and reuses the connection the first task just
+    /// established, so only one real QUIC connection is ever opened per peer.
+    connect_lock: AsyncMutex<()>,
 }
 
 impl IrohEndpoint {
@@ -58,6 +66,7 @@ impl IrohEndpoint {
             inboxes: BTreeMap::new(),
             router: None,
             connection_cache: Mutex::new(HashMap::new()),
+            connect_lock: AsyncMutex::new(()),
         })
     }
 
@@ -117,7 +126,7 @@ impl IrohEndpoint {
     ) -> Result<Channel> {
         let cache_key = (endpoint_id.to_string(), protocol.to_string());
 
-        // Try to reuse an existing open connection.
+        // Fast path: try to reuse an existing open connection (no async lock needed).
         let cached = self
             .connection_cache
             .lock()
@@ -137,6 +146,38 @@ impl IrohEndpoint {
                         protocol,
                         error = %err,
                         "cached connection stale, reconnecting"
+                    );
+                    self.connection_cache.lock().unwrap().remove(&cache_key);
+                }
+            }
+        }
+
+        // Slow path: serialise all concurrent fresh-connection attempts.
+        // Tasks that were blocked here will re-check the cache below and
+        // reuse the connection established by whoever went first.
+        let _connect_guard = self.connect_lock.lock().await;
+
+        // Re-check after acquiring the lock — another task may have just
+        // connected and cached the result while we were waiting.
+        let cached = self
+            .connection_cache
+            .lock()
+            .unwrap()
+            .get(&cache_key)
+            .cloned();
+
+        if let Some(conn) = cached {
+            match conn.open_bi().await {
+                Ok((send, _recv)) => {
+                    debug!(endpoint_id, protocol, "reusing cached connection (post-lock)");
+                    return Ok(Channel::new(conn, send));
+                }
+                Err(err) => {
+                    debug!(
+                        endpoint_id,
+                        protocol,
+                        error = %err,
+                        "cached connection stale after lock, reconnecting"
                     );
                     self.connection_cache.lock().unwrap().remove(&cache_key);
                 }
@@ -163,7 +204,7 @@ impl IrohEndpoint {
     }
 
     /// Shut down the endpoint.
-    pub async fn close(self) {
+    pub async fn close(&mut self) {
         // Gracefully close all cached connections before shutting down.
         let connections: Vec<Connection> = self
             .connection_cache
@@ -176,7 +217,7 @@ impl IrohEndpoint {
             conn.close(0u32.into(), b"done");
         }
 
-        if let Some(router) = self.router {
+        if let Some(router) = self.router.take() {
             let _ = router.shutdown().await;
             return;
         }
@@ -305,6 +346,10 @@ impl MaEndpoint for IrohEndpoint {
         channel.send(&cbor).await?;
         channel.close();
         Ok(())
+    }
+
+    async fn close(&mut self) {
+        IrohEndpoint::close(self).await;
     }
 }
 

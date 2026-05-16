@@ -77,6 +77,9 @@ pub trait MaEndpoint: Send + Sync {
     /// Fire-and-forget to a target on a specific protocol.
     async fn send_to(&self, target: &str, protocol: &str, message: &Message) -> Result<()>;
 
+    /// Gracefully shut down the endpoint, closing all cached connections.
+    async fn close(&mut self);
+
     /// Open a transport-agnostic outbox to a remote DID and protocol.
     ///
     /// Resolves the DID document, checks `ma.services` for the requested
