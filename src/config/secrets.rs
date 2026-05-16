@@ -373,7 +373,7 @@ impl SecretBundle {
         // Restore the original creation time — build_identity_from_keys sets
         // created_at to now(), but it must reflect when the bundle was first
         // generated, not when the document is rebuilt.
-        identity.document.created_at = self.created_at.clone();
+        identity.document.created_at.clone_from(&self.created_at);
         let vm = identity
             .document
             .get_verification_method_by_id(&identity.document.assertion_method[0].clone())

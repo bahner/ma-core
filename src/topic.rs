@@ -13,7 +13,7 @@ use crate::Message;
 
 use crate::endpoint::DEFAULT_INBOX_CAPACITY;
 use crate::inbox::Inbox;
-use crate::service::{BROADCAST_TOPIC, CONTENT_TYPE_BROADCAST};
+use crate::service::{BROADCAST_TOPIC, MESSAGE_TYPE_BROADCAST};
 
 /// A 32-byte topic identifier derived from `blake3(topic_string)`.
 pub type TopicId = [u8; 32];
@@ -193,7 +193,7 @@ impl Topic {
         }
 
         // §1.4 rule 1: content type must be broadcast.
-        if message.content_type != CONTENT_TYPE_BROADCAST {
+        if message.message_type != MESSAGE_TYPE_BROADCAST {
             return false;
         }
 
@@ -254,7 +254,8 @@ mod tests {
         Message::new(
             from.to_string(),
             String::new(),
-            CONTENT_TYPE_BROADCAST,
+            MESSAGE_TYPE_BROADCAST,
+            "text/plain",
             b"hello world".to_vec(),
             signing_key,
         )
@@ -303,7 +304,7 @@ mod tests {
         assert!(t.deliver(msg));
         let drained = t.drain();
         assert_eq!(drained.len(), 1);
-        assert_eq!(drained[0].content_type, CONTENT_TYPE_BROADCAST);
+        assert_eq!(drained[0].message_type, MESSAGE_TYPE_BROADCAST);
     }
 
     #[test]
@@ -316,6 +317,7 @@ mod tests {
             did,
             String::new(),
             "application/x-ma-custom",
+            "text/plain",
             b"payload".to_vec(),
             &sk,
         )

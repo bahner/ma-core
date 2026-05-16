@@ -22,7 +22,7 @@ use super::kubo::{dag_put, import_key, list_keys, name_publish_with_retry, IpnsP
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use reqwest::Url;
 
-use crate::service::CONTENT_TYPE_IPFS_REQUEST;
+use crate::service::MESSAGE_TYPE_IPFS_REQUEST;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IpfsPublishDidRequest {
@@ -136,11 +136,11 @@ pub fn validate_ipfs_publish_request(message_cbor: &[u8]) -> Result<ValidatedIpf
     let message =
         Message::decode(message_cbor).map_err(|e| anyhow!("invalid signed message: {}", e))?;
 
-    if message.content_type != CONTENT_TYPE_IPFS_REQUEST {
+    if message.message_type != MESSAGE_TYPE_IPFS_REQUEST {
         return Err(anyhow!(
             "expected {} on ma/ipfs/1, got {}",
-            CONTENT_TYPE_IPFS_REQUEST,
-            message.content_type
+            MESSAGE_TYPE_IPFS_REQUEST,
+            message.message_type
         ));
     }
 
@@ -306,7 +306,8 @@ mod tests {
         let message = Message::new(
             identity.document.id.clone(),
             String::new(),
-            CONTENT_TYPE_IPFS_REQUEST,
+            MESSAGE_TYPE_IPFS_REQUEST,
+            "application/json",
             payload,
             &signing_key,
         )
@@ -328,7 +329,8 @@ mod tests {
         let message = Message::new(
             identity.document.id.clone(),
             String::new(),
-            CONTENT_TYPE_IPFS_REQUEST,
+            MESSAGE_TYPE_IPFS_REQUEST,
+            "application/json",
             b"not json".to_vec(),
             &signing_key,
         )

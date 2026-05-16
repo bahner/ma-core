@@ -29,7 +29,7 @@ fn default_message_ttl_secs() -> u64 {
 }
 
 #[must_use]
-pub fn message_type() -> String {
+pub fn default_protocol() -> String {
     format!("{MESSAGE_PREFIX}{}", constants::VERSION)
 }
 
@@ -40,6 +40,8 @@ pub fn message_type() -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Headers {
     pub id: String,
+    #[serde(rename = "protocol")]
+    pub protocol: String,
     #[serde(rename = "type")]
     pub message_type: String,
     pub from: String,
@@ -60,7 +62,7 @@ pub struct Headers {
 impl Headers {
     pub fn validate(&self) -> Result<()> {
         validate_message_id(&self.id)?;
-        validate_message_type(&self.message_type)?;
+        validate_protocol(&self.protocol)?;
         if let Some(reply_to) = &self.reply_to {
             validate_message_id(reply_to)?;
         }
@@ -72,7 +74,7 @@ impl Headers {
         Did::validate(&self.from)?;
         let recipient_is_empty = self.to.trim().is_empty();
 
-        match self.content_type.as_str() {
+        match self.message_type.as_str() {
             "application/x-ma-broadcast" => {
                 if !recipient_is_empty {
                     return Err(MaError::BroadcastMustNotHaveRecipient);
@@ -126,6 +128,7 @@ impl Headers {
 /// let msg = Message::new(
 ///     sender.document.id.clone(),
 ///     recipient.document.id.clone(),
+///     "application/x-ma-message",
 ///     "text/plain",
 ///     b"hello".to_vec(),
 ///     &signing_key,
@@ -142,6 +145,8 @@ impl Headers {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub id: String,
+    #[serde(rename = "protocol")]
+    pub protocol: String,
     #[serde(rename = "type")]
     pub message_type: String,
     pub from: String,
@@ -162,6 +167,7 @@ impl Message {
     pub fn new(
         from: impl Into<String>,
         to: impl Into<String>,
+        message_type: impl Into<String>,
         content_type: impl Into<String>,
         content: Vec<u8>,
         signing_key: &SigningKey,
@@ -169,6 +175,7 @@ impl Message {
         Self::new_with_ttl(
             from,
             to,
+            message_type,
             content_type,
             content,
             DEFAULT_MESSAGE_TTL_SECS,
@@ -179,6 +186,7 @@ impl Message {
     pub fn new_with_ttl(
         from: impl Into<String>,
         to: impl Into<String>,
+        message_type: impl Into<String>,
         content_type: impl Into<String>,
         content: Vec<u8>,
         ttl: u64,
@@ -186,7 +194,8 @@ impl Message {
     ) -> Result<Self> {
         let mut message = Self {
             id: nanoid!(),
-            message_type: message_type(),
+            protocol: default_protocol(),
+            message_type: message_type.into(),
             from: from.into(),
             to: to.into(),
             created_at: now_unix_secs()?,
@@ -218,6 +227,7 @@ impl Message {
     pub fn unsigned_headers(&self) -> Headers {
         Headers {
             id: self.id.clone(),
+            protocol: self.protocol.clone(),
             message_type: self.message_type.clone(),
             from: self.from.clone(),
             to: self.to.clone(),
@@ -320,6 +330,7 @@ impl Message {
         headers.validate()?;
         Ok(Self {
             id: headers.id,
+            protocol: headers.protocol,
             message_type: headers.message_type,
             from: headers.from,
             to: headers.to,
@@ -410,6 +421,7 @@ impl ReplayGuard {
 /// let msg = Message::new(
 ///     alice.document.id.clone(),
 ///     bob.document.id.clone(),
+///     "application/x-ma-message",
 ///     "text/plain",
 ///     b"secret".to_vec(),
 ///     &alice_key,
@@ -546,8 +558,8 @@ fn validate_message_id(id: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_message_type(kind: &str) -> Result<()> {
-    if kind == message_type() {
+fn validate_protocol(kind: &str) -> Result<()> {
+    if kind == default_protocol() {
         return Ok(());
     }
 
@@ -769,7 +781,8 @@ mod tests {
         let message = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma",
+            "application/x-ma-message",
+            "text/plain",
             b"look".to_vec(),
             &sender_signing,
         )
@@ -796,7 +809,8 @@ mod tests {
         let mut message = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma",
+            "application/x-ma-message",
+            "text/plain",
             b"look".to_vec(),
             &sender_signing,
         )
@@ -813,7 +827,8 @@ mod tests {
         let mut message = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma",
+            "application/x-ma-message",
+            "text/plain",
             b"look".to_vec(),
             &sender_signing,
         )
@@ -830,7 +845,8 @@ mod tests {
         let mut message = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma",
+            "application/x-ma-message",
+            "text/plain",
             b"look".to_vec(),
             &sender_signing,
         )
@@ -852,7 +868,8 @@ mod tests {
         let mut message = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma",
+            "application/x-ma-message",
+            "text/plain",
             b"look".to_vec(),
             &sender_signing,
         )
@@ -873,7 +890,8 @@ mod tests {
         let mut message = Message::new_with_ttl(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma",
+            "application/x-ma-message",
+            "text/plain",
             b"look".to_vec(),
             1,
             &sender_signing,
@@ -896,7 +914,8 @@ mod tests {
         let message = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma",
+            "application/x-ma-message",
+            "text/plain",
             b"look".to_vec(),
             &sender_signing,
         )
@@ -932,6 +951,7 @@ mod tests {
             sender_document.id.clone(),
             String::new(),
             "application/x-ma-broadcast",
+            "text/plain",
             b"hello everyone".to_vec(),
             &sender_signing,
         )
@@ -949,6 +969,7 @@ mod tests {
             sender_document.id.clone(),
             recipient_document.id.clone(),
             "application/x-ma-broadcast",
+            "text/plain",
             b"hello everyone".to_vec(),
             &sender_signing,
         );
@@ -966,6 +987,7 @@ mod tests {
             sender_document.id.clone(),
             String::new(),
             "application/x-ma-message",
+            "text/plain",
             b"secret".to_vec(),
             &sender_signing,
         );
@@ -980,6 +1002,7 @@ mod tests {
             sender_document.id.clone(),
             String::new(),
             "application/x-ma-custom",
+            "text/plain",
             b"whatever".to_vec(),
             &sender_signing,
         )
@@ -997,6 +1020,7 @@ mod tests {
             sender_document.id.clone(),
             recipient_document.id.clone(),
             "application/x-ma-custom",
+            "text/plain",
             b"whatever".to_vec(),
             &sender_signing,
         )

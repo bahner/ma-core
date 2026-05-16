@@ -169,7 +169,10 @@ impl IrohEndpoint {
         if let Some(conn) = cached {
             match conn.open_bi().await {
                 Ok((send, _recv)) => {
-                    debug!(endpoint_id, protocol, "reusing cached connection (post-lock)");
+                    debug!(
+                        endpoint_id,
+                        protocol, "reusing cached connection (post-lock)"
+                    );
                     return Ok(Channel::new(conn, send));
                 }
                 Err(err) => {
@@ -506,7 +509,8 @@ mod tests {
         crate::Message::new(
             did_id,
             String::new(),
-            crate::service::CONTENT_TYPE_BROADCAST,
+            crate::service::MESSAGE_TYPE_BROADCAST,
+            "application/octet-stream",
             b"test".to_vec(),
             &sk,
         )
