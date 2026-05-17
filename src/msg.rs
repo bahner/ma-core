@@ -895,21 +895,24 @@ mod tests {
     #[test]
     fn custom_ttl_rejects_expired_message() {
         let (sender_signing, _, sender_document, _, _, recipient_document) = fixture_documents();
-        let mut message = Message::new_with_ttl(
+        let now_nanos = now_unix_nanos().expect("current timestamp");
+        // Create with a valid 60-second window.
+        let mut message = Message::new_with_exp(
             sender_document.id.clone(),
             recipient_document.id.clone(),
             "application/x-ma-message",
             "text/plain",
             b"look".to_vec(),
-            1,
+            now_nanos + 60_000_000_000,
             &sender_signing,
         )
-        .expect("message creation with ttl");
+        .expect("message creation with custom exp");
 
-        message.created_at = now_unix_secs().expect("current timestamp") - 5.0;
+        // Rewind exp to 1 ns (well in the past) and re-sign.
+        message.exp = 1;
         message
             .sign(&sender_signing)
-            .expect("re-sign with stale timestamp");
+            .expect("re-sign with expired exp");
 
         let result = message.verify_with_document(&sender_document);
         assert!(matches!(result, Err(MaError::MessageTooOld)));

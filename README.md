@@ -1,8 +1,8 @@
 # ma-core
 
-A lean DIDComm service library for the ma ecosystem.
+A lean DIDComm service library for the 間 ecosystem.
 
-`ma-core` provides everything an ma endpoint needs: DID document publishing,
+`ma-core` provides everything a 間 endpoint needs: DID document publishing,
 service inboxes, outbox delivery, and transport abstraction — without coupling
 to any specific runtime or application.
 
