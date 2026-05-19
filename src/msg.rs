@@ -218,6 +218,25 @@ impl Message {
         Ok(message)
     }
 
+    /// Build a CBOR-encoded message, automatically wrapping `payload` with a
+    /// `CODEC_CBOR` multicodec prefix. Use for all RPC requests and replies.
+    pub fn new_cbor(
+        from: impl Into<String>,
+        to: impl Into<String>,
+        message_type: impl Into<String>,
+        payload: &[u8],
+        signing_key: &SigningKey,
+    ) -> Result<Self> {
+        Self::new(
+            from,
+            to,
+            message_type,
+            "application/cbor",
+            encode_content(crate::multiformat::CODEC_CBOR, payload),
+            signing_key,
+        )
+    }
+
     pub fn encode(&self) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         ciborium::ser::into_writer(self, &mut out)
@@ -227,6 +246,15 @@ impl Message {
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         ciborium::de::from_reader(bytes).map_err(|error| MaError::CborDecode(error.to_string()))
+    }
+
+    /// Return the decoded content payload, stripping the multicodec varint prefix.
+    /// Falls back to the raw `content` bytes for legacy messages sent without a prefix.
+    #[must_use]
+    pub fn payload(&self) -> Vec<u8> {
+        decode_content(&self.content)
+            .map(|(_, p)| p)
+            .unwrap_or_else(|_| self.content.clone())
     }
 
     #[must_use]
