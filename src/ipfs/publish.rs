@@ -237,7 +237,7 @@ pub fn validate_ipfs_request(message: &Message) -> Result<ValidatedIpfsRequest> 
         ));
     }
 
-    let payload: IpfsRequestPayload = ciborium::de::from_reader(message.content.as_slice())
+    let payload: IpfsRequestPayload = ciborium::de::from_reader(message.payload().as_slice())
         .map_err(|e| anyhow!("invalid IPFS request payload: {}", e))?;
 
     match payload {

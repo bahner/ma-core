@@ -25,18 +25,24 @@ pub const DEFAULT_MAX_CLOCK_SKEW_SECS: u64 = 30;
 pub const DEFAULT_MESSAGE_TTL_SECS: u64 = 3600;
 
 /// Prefix `payload` with a multicodec varint so the codec is self-describing.
-/// Common codec values: `CODEC_IDENTITY` (0x00) raw bytes, `CODEC_DAG_CBOR` (0x71), `CODEC_RAW` (0x55).
-/// Use `CODEC_IDENTITY` for plain text — backward-compatible with receivers that treat
-/// `content` as raw bytes.
 pub fn encode_content(codec: u64, payload: &[u8]) -> Vec<u8> {
     crate::multiformat::multicodec_encode(codec, payload)
 }
 
 /// Peel the multicodec varint prefix from `content` bytes.
-/// Returns `(codec, payload)`. Legacy messages without a prefix should be
-/// treated as codec `0x00` (identity/raw bytes).
+/// Returns `(codec, payload)`.
 pub fn decode_content(content: &[u8]) -> crate::error::MaResult<(u64, Vec<u8>)> {
     crate::multiformat::multicodec_decode(content)
+}
+
+/// Map a `content_type` string to the multicodec codec used to prefix the payload.
+/// `Message::new` applies this automatically — callers never handle raw prefixes.
+fn codec_for(content_type: &str) -> u64 {
+    match content_type {
+        "application/cbor" => crate::multiformat::CODEC_CBOR,
+        "application/vnd.ipld.dag-cbor" => crate::multiformat::CODEC_DAG_CBOR,
+        _ => crate::multiformat::CODEC_IDENTITY,
+    }
 }
 
 #[must_use]
@@ -198,6 +204,8 @@ impl Message {
         exp: u64,
         signing_key: &SigningKey,
     ) -> Result<Self> {
+        let content_type_str: String = content_type.into();
+        let encoded = encode_content(codec_for(&content_type_str), &content);
         let mut message = Self {
             id: nanoid!(),
             protocol: default_protocol(),
@@ -206,9 +214,9 @@ impl Message {
             to: to.into(),
             created_at: now_unix_secs()?,
             exp,
-            content_type: content_type.into(),
+            content_type: content_type_str,
             reply_to: None,
-            content,
+            content: encoded,
             signature: Vec::new(),
         };
 
@@ -216,25 +224,6 @@ impl Message {
         message.validate_content()?;
         message.sign(signing_key)?;
         Ok(message)
-    }
-
-    /// Build a CBOR-encoded message, automatically wrapping `payload` with a
-    /// `CODEC_CBOR` multicodec prefix. Use for all RPC requests and replies.
-    pub fn new_cbor(
-        from: impl Into<String>,
-        to: impl Into<String>,
-        message_type: impl Into<String>,
-        payload: &[u8],
-        signing_key: &SigningKey,
-    ) -> Result<Self> {
-        Self::new(
-            from,
-            to,
-            message_type,
-            "application/cbor",
-            encode_content(crate::multiformat::CODEC_CBOR, payload),
-            signing_key,
-        )
     }
 
     pub fn encode(&self) -> Result<Vec<u8>> {
@@ -248,8 +237,8 @@ impl Message {
         ciborium::de::from_reader(bytes).map_err(|error| MaError::CborDecode(error.to_string()))
     }
 
-    /// Return the decoded content payload, stripping the multicodec varint prefix.
-    /// Falls back to the raw `content` bytes for legacy messages sent without a prefix.
+    /// Return the decoded content payload, stripping the multicodec varint prefix
+    /// applied by [`Message::new`].
     #[must_use]
     pub fn payload(&self) -> Vec<u8> {
         decode_content(&self.content)
@@ -471,7 +460,7 @@ impl ReplayGuard {
 ///     hex::decode(&bob.encryption_private_key_hex).unwrap().try_into().unwrap(),
 /// ).unwrap();
 /// let decrypted = envelope.open(&bob_enc_key, &alice.document).unwrap();
-/// assert_eq!(decrypted.content, b"secret");
+/// assert_eq!(decrypted.payload(), b"secret");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -830,7 +819,7 @@ mod tests {
             .open(&recipient_encryption, &sender_document)
             .expect("envelope opens");
 
-        assert_eq!(opened.content, b"look");
+        assert_eq!(opened.payload(), b"look");
         assert_eq!(opened.from, sender_document.id);
         assert_eq!(opened.to, recipient_document.id);
     }

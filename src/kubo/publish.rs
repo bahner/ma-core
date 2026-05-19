@@ -147,7 +147,7 @@ pub fn validate_ipfs_publish_request(message_cbor: &[u8]) -> Result<ValidatedIpf
     let sender_did = Did::try_from(message.from.as_str())
         .map_err(|e| anyhow!("invalid sender did '{}': {}", message.from, e))?;
 
-    let request: IpfsPublishDidRequest = serde_json::from_slice(&message.content)
+    let request: IpfsPublishDidRequest = serde_json::from_slice(&message.payload())
         .map_err(|e| anyhow!("invalid IPFS publish payload: {}", e))?;
 
     let document = Document::decode(&request.did_document)
