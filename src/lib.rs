@@ -119,8 +119,9 @@ pub use multiformat::{
     CODEC_CBOR, CODEC_DAG_CBOR, CODEC_DAG_JSON, CODEC_IDENTITY, CODEC_JSON, CODEC_RAW,
 };
 
+pub use acl::normalize_principal;
 #[cfg(feature = "acl")]
-pub use acl::Acl;
+pub use acl::{check_op, AclMap, Permissions, PERM_R, PERM_RWX, PERM_W, PERM_X};
 
 // ─── Re-export service constants ────────────────────────────────────────────
 
