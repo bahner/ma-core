@@ -141,7 +141,7 @@ impl Headers {
 ///     recipient.document.id.clone(),
 ///     "application/x-ma-message",
 ///     "text/plain",
-///     b"hello".to_vec(),
+///     b"hello",
 ///     &signing_key,
 /// ).unwrap();
 ///
@@ -189,7 +189,7 @@ impl Message {
             to,
             message_type,
             content_type,
-            &content,
+            content,
             exp,
             signing_key,
         )
@@ -446,7 +446,7 @@ impl ReplayGuard {
 ///     bob.document.id.clone(),
 ///     "application/x-ma-message",
 ///     "text/plain",
-///     b"secret".to_vec(),
+///     b"secret",
 ///     &alice_key,
 /// ).unwrap();
 ///
@@ -804,7 +804,7 @@ mod tests {
             recipient_document.id.clone(),
             "application/x-ma-message",
             "text/plain",
-            b"look".to_vec(),
+            b"look",
             &sender_signing,
         )
         .expect("message creation");
@@ -832,7 +832,7 @@ mod tests {
             recipient_document.id.clone(),
             "application/x-ma-message",
             "text/plain",
-            b"look".to_vec(),
+            b"look",
             &sender_signing,
         )
         .expect("message creation");
@@ -850,7 +850,7 @@ mod tests {
             recipient_document.id.clone(),
             "application/x-ma-message",
             "text/plain",
-            b"look".to_vec(),
+            b"look",
             &sender_signing,
         )
         .expect("message creation");
@@ -872,7 +872,7 @@ mod tests {
             recipient_document.id.clone(),
             "application/x-ma-message",
             "text/plain",
-            b"look".to_vec(),
+            b"look",
             &sender_signing,
         )
         .expect("message creation");
@@ -895,7 +895,7 @@ mod tests {
             recipient_document.id.clone(),
             "application/x-ma-message",
             "text/plain",
-            b"look".to_vec(),
+            b"look",
             &sender_signing,
         )
         .expect("message creation");
@@ -944,7 +944,7 @@ mod tests {
             recipient_document.id.clone(),
             "application/x-ma-message",
             "text/plain",
-            b"look".to_vec(),
+            b"look",
             &sender_signing,
         )
         .expect("message creation");
@@ -974,7 +974,7 @@ mod tests {
             String::new(),
             "application/x-ma-broadcast",
             "text/plain",
-            b"hello everyone".to_vec(),
+            b"hello everyone",
             &sender_signing,
         )
         .expect("broadcast message creation");
@@ -992,7 +992,7 @@ mod tests {
             recipient_document.id.clone(),
             "application/x-ma-broadcast",
             "text/plain",
-            b"hello everyone".to_vec(),
+            b"hello everyone",
             &sender_signing,
         );
 
@@ -1010,7 +1010,7 @@ mod tests {
             String::new(),
             "application/x-ma-message",
             "text/plain",
-            b"secret".to_vec(),
+            b"secret",
             &sender_signing,
         );
 
@@ -1025,7 +1025,7 @@ mod tests {
             String::new(),
             "application/x-ma-custom",
             "text/plain",
-            b"whatever".to_vec(),
+            b"whatever",
             &sender_signing,
         )
         .expect("custom content type message creation");
@@ -1043,7 +1043,7 @@ mod tests {
             recipient_document.id.clone(),
             "application/x-ma-custom",
             "text/plain",
-            b"whatever".to_vec(),
+            b"whatever",
             &sender_signing,
         )
         .expect("custom content type with recipient");

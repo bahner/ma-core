@@ -240,7 +240,7 @@ mod tests {
             String::new(),
             MESSAGE_TYPE_BROADCAST,
             "text/plain",
-            b"hello world".to_vec(),
+            b"hello world",
             signing_key,
         )
         .expect("broadcast message")
@@ -302,7 +302,7 @@ mod tests {
             String::new(),
             "application/x-ma-custom",
             "text/plain",
-            b"payload".to_vec(),
+            b"payload",
             &sk,
         )
         .expect("custom message");

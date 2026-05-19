@@ -441,7 +441,7 @@ mod tests {
             String::new(),
             MESSAGE_TYPE_IPFS_REQUEST,
             "application/cbor",
-            payload,
+            &payload,
             &signing_key,
         )
         .expect("message");
@@ -463,7 +463,7 @@ mod tests {
             String::new(),
             "application/x-test",
             "application/cbor",
-            payload,
+            &payload,
             &signing_key,
         )
         .expect("message");
@@ -489,7 +489,7 @@ mod tests {
             String::new(),
             MESSAGE_TYPE_IPFS_REQUEST,
             "application/cbor",
-            payload,
+            &payload,
             &signing_key,
         )
         .expect("message");
@@ -515,7 +515,7 @@ mod tests {
             String::new(),
             MESSAGE_TYPE_IPFS_REQUEST,
             "application/cbor",
-            payload,
+            &payload,
             &signing_key,
         )
         .expect("message");

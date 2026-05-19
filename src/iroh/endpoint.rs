@@ -568,7 +568,7 @@ mod tests {
             String::new(),
             crate::service::MESSAGE_TYPE_BROADCAST,
             "application/octet-stream",
-            b"test".to_vec(),
+            b"test",
             &sk,
         )
         .expect("message")

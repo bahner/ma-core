@@ -26,8 +26,8 @@ to any specific runtime or application.
 The crate currently ships with an iroh-based transport backend internally,
 but iroh-specific types are considered backend details.
 
-Every endpoint must provide `ma/inbox/0.0.1`. Endpoints may optionally
-provide `ma/ipfs/0.0.1` to publish DID documents on behalf of others.
+Every endpoint must provide `/ma/inbox/0.0.1`. Endpoints may optionally
+provide `/ma/ipfs/0.0.1` to publish DID documents on behalf of others.
 
 ### DID document publishing
 
@@ -57,11 +57,6 @@ Parses DID document service strings like `/iroh/<endpoint-id>/ma/inbox/0.0.1`:
 - `generate_secret_key_file` / `load_secret_key_bytes` — secure 32-byte
   key persistence with OS-level permission hardening.
 
-### Pinning
-
-- `pin_update_add_rm` — pin new CID, unpin old, report unpin failures as
-  metadata (not hard errors).
-
 ### Native IPFS RPC (non-WASM, `kubo` feature)
 
 HTTP client for `/api/v0/` endpoints: add, cat, DAG put/get,
@@ -76,6 +71,7 @@ These are Cargo compile-time feature flags.
 | `kubo`   | no      | Native IPFS RPC backend for publishing |
 | `iroh`   | yes     | Internal iroh QUIC transport backend |
 | `gossip` | yes     | Internal iroh gossip support |
+| `acl`    | no      | Operation-level access control (`AclMap`, `check_op`, permission bits) |
 | `config` | no      | Config model + YAML serialization + encrypted secret bundles (CLI/fs/logging remain native-only) |
 
 ### `config` feature
@@ -171,7 +167,7 @@ handles deserialization and validation before messages enter the queue:
 
 ```rust,ignore
 // Endpoint gives you an Inbox<Message> when you register a service
-let mut inbox = endpoint.service("ma/inbox/0.0.1");
+let mut inbox = endpoint.service("/ma/inbox/0.0.1");
 
 let now = current_time_secs();
 while let Some(msg) = inbox.pop(now) {

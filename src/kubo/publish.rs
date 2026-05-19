@@ -308,7 +308,7 @@ mod tests {
             String::new(),
             MESSAGE_TYPE_IPFS_REQUEST,
             "application/json",
-            payload,
+            &payload,
             &signing_key,
         )
         .expect("message");
@@ -331,7 +331,7 @@ mod tests {
             String::new(),
             MESSAGE_TYPE_IPFS_REQUEST,
             "application/json",
-            b"not json".to_vec(),
+            b"not json",
             &signing_key,
         )
         .expect("message");

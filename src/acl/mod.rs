@@ -11,12 +11,27 @@
 //! | `w`    |  2  | Write — mutate entities/config; required for `/ma/ipfs/0.0.1` |
 //! | `x`    |  1  | Execute — invoke entity verbs; required for `/ma/rpc/0.0.1` |
 //!
+//! # Principal key forms
+//!
+//! Valid keys in an [`AclMap`] (and in YAML) are exactly:
+//!
+//! | Form | Meaning |
+//! |------|---------|
+//! | `"*"` | Wildcard — matches any caller |
+//! | `"did:ma:<identity>"` | Bare DID — a remote runtime identity (no fragment) |
+//! | `"#<local>"` | Local entity identifier |
+//! | `"group:<handle>.<name>"` | Named group of principals |
+//!
+//! DID-URLs with fragments (`did:ma:foo#bar`) are **not** valid keys.
+//! Use [`is_valid_acl_key`] to validate keys before inserting them.
+//!
 //! # YAML format
 //!
 //! ```yaml
 //! acl:
 //!   "*": "rwx"          # everyone: full access
 //!   "did:ma:bob": "rx"  # read + execute, no write
+//!   "#local-agent":     # local entity — explicit deny
 //!   "did:ma:eve":       # null / absent → explicit deny
 //! ```
 //!
@@ -31,7 +46,7 @@
 //! assert!(check_op(&acl, "did:ma:Qmevil", PERM_X).is_err());
 //! ```
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
@@ -151,9 +166,15 @@ impl<'de> Deserialize<'de> for Permissions {
 
 /// Operation-level access control map.
 ///
-/// Keys are principal strings: `"*"` (wildcard) or `"did:ma:…"` (bare
-/// identity). Values are [`Permissions`].
-pub type AclMap = BTreeMap<String, Permissions>;
+/// Keys are principal strings — exactly one of:
+/// - `"*"` — wildcard
+/// - `"did:ma:<identity>"` — bare DID, no fragment
+/// - `"#<local>"` — local entity identifier
+/// - `"group:<handle>.<name>"` — named group of principals
+///
+/// DID-URLs with fragments (`did:ma:foo#bar`) are **not** valid keys;
+/// use [`is_valid_acl_key`] to validate before inserting.
+pub type AclMap = HashMap<String, Permissions>;
 
 // ── check_op ───────────────────────────────────────────────────────────────────
 
@@ -186,10 +207,54 @@ pub fn check_op(acl: &AclMap, caller: &str, required: u8) -> Result<()> {
     }
 }
 
-/// Strip fragment from DID-URLs for principal normalisation.
+/// Return `true` if `key` is a valid [`AclMap`] principal key.
 ///
-/// `did:ma:foo#bar` → `did:ma:foo`. Non-DID strings (like `"*"`) are returned
-/// unchanged.
+/// Valid forms:
+/// - `"*"` — wildcard
+/// - `"did:ma:<identity>"` — bare DID, no fragment
+/// - `"#<local>"` — local entity identifier
+/// - `"group:<handle>.<name>"` — named group (`<handle>` and `<name>` non-empty)
+pub fn is_valid_acl_key(key: &str) -> bool {
+    key == "*"
+        || (key.starts_with("did:") && !key.contains('#'))
+        || (key.starts_with('#') && key.len() > 1)
+        || is_valid_group_key(key)
+}
+
+/// Return `true` if `key` is a valid group principal (`group:<handle>.<name>`).
+fn is_valid_group_key(key: &str) -> bool {
+    if let Some(rest) = key.strip_prefix("group:") {
+        if let Some(dot) = rest.find('.') {
+            let handle = &rest[..dot];
+            let name = &rest[dot + 1..];
+            return !handle.is_empty() && !name.is_empty();
+        }
+    }
+    false
+}
+
+/// Validate all keys in an [`AclMap`], returning a descriptive error for the
+/// first invalid key found.
+///
+/// Call this immediately after loading an ACL from YAML or any external source.
+#[cfg(feature = "acl")]
+pub fn validate_acl_map(acl: &AclMap) -> Result<()> {
+    for key in acl.keys() {
+        if !is_valid_acl_key(key) {
+            return Err(Error::Acl(format!(
+                "invalid ACL key {key:?}: must be \"*\", a bare DID (\"did:ma:\u{2026}\"), \
+                 a local entity (\"#name\"), or a group (\"group:<handle>.<name>\")"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Normalise a caller identity for [`AclMap`] lookup.
+///
+/// - `did:ma:foo#bar` → `did:ma:foo` (strips fragment from DID-URLs)
+/// - `#local` → `#local` (local entity, passed through)
+/// - `*` → `*` (wildcard, passed through)
 pub fn normalize_principal(did: &str) -> &str {
     if did.starts_with("did:") {
         if let Some(pos) = did.find('#') {
@@ -255,10 +320,33 @@ mod tests {
     }
 
     #[test]
+    fn local_entity_key_allowed() {
+        let acl = m(&[("#agent", "rwx")]);
+        assert!(check_op(&acl, "#agent", PERM_X).is_ok());
+        assert!(check_op(&acl, "#other", PERM_X).is_err());
+    }
+
+    #[test]
     fn normalize_strips_fragment() {
         assert_eq!(normalize_principal("did:ma:foo#bar"), "did:ma:foo");
         assert_eq!(normalize_principal("did:ma:foo"), "did:ma:foo");
+        assert_eq!(normalize_principal("#local"), "#local");
         assert_eq!(normalize_principal("*"), "*");
+    }
+
+    #[test]
+    fn valid_acl_keys() {
+        assert!(is_valid_acl_key("*"));
+        assert!(is_valid_acl_key("did:ma:Qmfoo"));
+        assert!(is_valid_acl_key("#agent"));
+        assert!(is_valid_acl_key("group:alice.venner"));
+        assert!(is_valid_acl_key("group:runtime.admins"));
+        assert!(!is_valid_acl_key("did:ma:Qmfoo#sign"));
+        assert!(!is_valid_acl_key("#"));
+        assert!(!is_valid_acl_key(""));
+        assert!(!is_valid_acl_key("group:noname"));
+        assert!(!is_valid_acl_key("group:.nohandle"));
+        assert!(!is_valid_acl_key("group:handle."));
     }
 
     #[test]
