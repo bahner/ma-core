@@ -117,7 +117,7 @@ pub fn generate_ipfs_store_request(
         publisher_did,
         MESSAGE_TYPE_IPFS_REQUEST,
         "application/cbor",
-        payload,
+        &payload,
         signing_key,
     )
     .map_err(|e| anyhow!("failed to build ipfs-store message: {}", e))

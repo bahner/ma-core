@@ -120,7 +120,9 @@ pub use multiformat::{
 };
 
 #[cfg(feature = "acl")]
-pub use acl::Acl;
+pub use acl::{
+    check_op, normalize_principal, AclMap, Permissions, PERM_R, PERM_RWX, PERM_W, PERM_X,
+};
 
 // ─── Re-export service constants ────────────────────────────────────────────
 

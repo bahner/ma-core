@@ -1,473 +1,202 @@
-//! Access control lists for ma identities and DID URLs.
+//! Operation-level access control for ma identities.
 //!
-//! An [`Acl`] is a list of allow/deny rules keyed by DID URL or fragment.
-//! Deny always wins over allow; an identity-level deny covers all DID-URLs
-//! under that identity. The wildcard `*` grants public access.
+//! An [`AclMap`] maps principal strings to [`Permissions`].
+//! Deny always wins over allow; a wildcard deny closes access to everyone.
+//!
+//! # Permission bits
+//!
+//! | Letter | Bit | Meaning |
+//! |--------|-----|---------|
+//! | `r`    |  4  | Read — list metadata, read config, fetch entities |
+//! | `w`    |  2  | Write — mutate entities/config; required for `/ma/ipfs/0.0.1` |
+//! | `x`    |  1  | Execute — invoke entity verbs; required for `/ma/rpc/0.0.1` |
 //!
 //! # YAML format
 //!
 //! ```yaml
 //! acl:
-//!   - "*"           # public access
-//!   - "did:ma:alice"
-//!   - "!did:ma:eve"
-//!   - "#read"
-//!   - "!#write"
+//!   "*": "rwx"          # everyone: full access
+//!   "did:ma:bob": "rx"  # read + execute, no write
+//!   "did:ma:eve":       # null / absent → explicit deny
 //! ```
 //!
 //! # Example
 //!
 //! ```rust
-//! # use ma_core::Acl;
-//! let yaml = "acl:\n  - \"*\"\n  - \"!did:ma:Qmevil\"\n";
-//! let acl = Acl::new_from_yaml(yaml).unwrap();
-//! assert!(acl.is_allowed("did:ma:Qmgood#read"));
-//! assert!(!acl.is_allowed("did:ma:Qmevil#read"));
+//! # use ma_core::{AclMap, Permissions, check_op, PERM_X};
+//! let mut acl = AclMap::new();
+//! acl.insert("*".to_string(), Permissions::Allow(PERM_X));
+//! acl.insert("did:ma:Qmevil".to_string(), Permissions::Deny);
+//! assert!(check_op(&acl, "did:ma:Qmgood", PERM_X).is_ok());
+//! assert!(check_op(&acl, "did:ma:Qmevil", PERM_X).is_err());
 //! ```
 
-use std::collections::HashSet;
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use std::sync::{Arc, Mutex};
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use web_time::Duration;
+use std::collections::BTreeMap;
+use std::fmt;
+use std::str::FromStr;
 
-use crate::Did;
-use cid::Cid;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use crate::kubo::{ipfs_add, name_publish_with_retry, IpnsPublishOptions};
+#[cfg(feature = "acl")]
 use crate::{Error, Result};
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use tokio::task::JoinHandle;
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use tokio::time::sleep;
 
-// ── Internal entry representation ─────────────────────────────────────────────
+// ── Permission bits ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Entry {
-    /// `*` — public access
-    Any,
-    /// `did:ma:…` — allow a full identity or DID-URL
-    Allow(Did),
-    /// `!did:ma:…` — deny a full identity or DID-URL
-    Deny(Did),
-    /// `#fragment` — allow by bare fragment (no identity check)
-    AllowFragment(String),
-    /// `!#fragment` — deny by bare fragment
-    DenyFragment(String),
-}
+/// Read permission: list metadata, read config, fetch entities.
+pub const PERM_R: u8 = 0b100;
+/// Write permission: mutate entities and config; required for `/ma/ipfs/0.0.1`.
+pub const PERM_W: u8 = 0b010;
+/// Execute permission: invoke entity verbs; required for `/ma/rpc/0.0.1`.
+pub const PERM_X: u8 = 0b001;
+/// All permissions combined.
+pub const PERM_RWX: u8 = 0b111;
 
-impl Entry {
-    fn parse(s: &str) -> Result<Self> {
-        let s = s.trim();
-        if s == "*" {
-            return Ok(Entry::Any);
-        }
-        if let Some(rest) = s.strip_prefix("!#") {
-            return Ok(Entry::DenyFragment(rest.to_owned()));
-        }
-        if let Some(rest) = s.strip_prefix('#') {
-            return Ok(Entry::AllowFragment(rest.to_owned()));
-        }
-        if let Some(rest) = s.strip_prefix('!') {
-            let did = Did::try_from(rest)
-                .map_err(|e| Error::Acl(format!("invalid DID in deny entry '{rest}': {e}")))?;
-            return Ok(Entry::Deny(did));
-        }
-        if s.starts_with("did:") {
-            let did =
-                Did::try_from(s).map_err(|e| Error::Acl(format!("invalid DID '{s}': {e}")))?;
-            return Ok(Entry::Allow(did));
-        }
-        Err(Error::Acl(format!("unrecognised ACL entry: '{s}'")))
-    }
-}
+// ── Permissions type ───────────────────────────────────────────────────────────
 
-// ── Compiled lookup tables ─────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Default)]
-struct Compiled {
-    /// `*` was present
-    public: bool,
-    /// identity-level denies (ipns key, no fragment)
-    deny_identities: HashSet<String>,
-    /// DID-URL denies (ipns, fragment)
-    deny_urls: HashSet<(String, String)>,
-    /// identity-level allows
-    allow_identities: HashSet<String>,
-    /// DID-URL allows
-    allow_urls: HashSet<(String, String)>,
-    /// bare-fragment denies
-    deny_fragments: HashSet<String>,
-    /// bare-fragment allows
-    allow_fragments: HashSet<String>,
-}
-
-impl Compiled {
-    fn build(entries: &[Entry]) -> Self {
-        let mut c = Compiled::default();
-        for e in entries {
-            match e {
-                Entry::Any => c.public = true,
-                Entry::Allow(did) => {
-                    if let Some(frag) = &did.fragment {
-                        c.allow_urls.insert((did.ipns.clone(), frag.clone()));
-                    } else {
-                        c.allow_identities.insert(did.ipns.clone());
-                    }
-                }
-                Entry::Deny(did) => {
-                    if let Some(frag) = &did.fragment {
-                        c.deny_urls.insert((did.ipns.clone(), frag.clone()));
-                    } else {
-                        c.deny_identities.insert(did.ipns.clone());
-                    }
-                }
-                Entry::AllowFragment(f) => {
-                    c.allow_fragments.insert(f.clone());
-                }
-                Entry::DenyFragment(f) => {
-                    c.deny_fragments.insert(f.clone());
-                }
-            }
-        }
-        c
-    }
-}
-
-// ── Public ACL type ────────────────────────────────────────────────────────────
-
-/// An access control list for an ma entity.
+/// Permission value for a principal in an [`AclMap`].
 ///
-/// Create with [`Acl::new_from_yaml`] or [`Acl::new_from_cid`].
-#[derive(Debug, Clone)]
-pub struct Acl {
-    entries: Vec<Entry>,
-    compiled: Compiled,
-    /// `true` when entries have changed since last publish.
-    pub dirty: bool,
-    generation: u64,
-    /// CID of the last successfully published DAG-CBOR node.
-    pub cid: Option<Cid>,
+/// Serialises as a permission string (`"rwx"`, `"rx"`, `"x"`, …) or YAML
+/// `null` for deny.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Permissions {
+    /// Explicit deny. Wins over any wildcard allow for the same principal.
+    Deny,
+    /// Allow with the given `r`/`w`/`x` bits.
+    Allow(u8),
 }
 
-impl Acl {
-    // ── Constructors ──────────────────────────────────────────────────────────
-
-    /// Parse an ACL from a YAML string.
-    ///
-    /// The YAML must contain an `acl:` key whose value is a sequence of
-    /// strings. Any unrecognised entry is a hard error (fail-fast).
-    ///
-    /// # Errors
-    /// Returns [`Error::Acl`] if the YAML is malformed or any entry is invalid.
-    pub fn new_from_yaml(yaml: &str) -> Result<Self> {
-        #[derive(serde::Deserialize)]
-        struct Wrapper {
-            acl: Vec<String>,
-        }
-        let w: Wrapper =
-            serde_yaml::from_str(yaml).map_err(|e| Error::Acl(format!("YAML parse error: {e}")))?;
-
-        let entries: Result<Vec<Entry>> = w.acl.iter().map(|s| Entry::parse(s)).collect();
-        let entries = entries?;
-        let compiled = Compiled::build(&entries);
-        Ok(Self {
-            entries,
-            compiled,
-            dirty: true,
-            generation: 0,
-            cid: None,
-        })
-    }
-
-    /// Reconstruct an ACL from a previously published YAML payload and its CID.
-    ///
-    /// Marks the ACL as clean (`dirty = false`) and records the CID.
-    ///
-    /// # Errors
-    /// Returns [`Error::Acl`] if the bytes are not valid UTF-8 or the YAML is
-    /// malformed.
-    pub fn new_from_cid(cid: Cid, data: &[u8]) -> Result<Self> {
-        let yaml = std::str::from_utf8(data)
-            .map_err(|e| Error::Acl(format!("ACL data is not UTF-8: {e}")))?;
-        let mut acl = Self::new_from_yaml(yaml)?;
-        acl.dirty = false;
-        acl.cid = Some(cid);
-        Ok(acl)
-    }
-
-    // ── Mutation ──────────────────────────────────────────────────────────────
-
-    /// Add an allow rule for `did_str`.
-    ///
-    /// `did_str` may be a bare `#fragment`, `did:ma:…`, or `did:ma:…#fragment`.
-    ///
-    /// # Errors
-    /// Returns [`Error::Acl`] if `did_str` cannot be parsed.
-    pub fn allow(&mut self, did_str: &str) -> Result<()> {
-        let entry = Entry::parse(did_str)?;
-        self.add_entry(entry)
-    }
-
-    /// Add a deny rule for `did_str`.
-    ///
-    /// Prefix with `!` is optional — this method adds the deny semantics
-    /// regardless. `did_str` may be `#fragment`, `did:ma:…`, or
-    /// `did:ma:…#fragment`.
-    ///
-    /// # Errors
-    /// Returns [`Error::Acl`] if `did_str` cannot be parsed as a DID or fragment.
-    pub fn deny(&mut self, did_str: &str) -> Result<()> {
-        // Strip a leading `!` if the caller already included it.
-        let s = did_str.strip_prefix('!').unwrap_or(did_str);
-        let deny_str = if s.starts_with('#') || s.starts_with("did:") {
-            format!("!{s}")
-        } else {
-            return Err(Error::Acl(format!(
-                "cannot deny '{did_str}': not a DID or fragment"
-            )));
-        };
-        let entry = Entry::parse(&deny_str)?;
-        self.add_entry(entry)
-    }
-
-    #[allow(clippy::unnecessary_wraps)]
-    fn add_entry(&mut self, entry: Entry) -> Result<()> {
-        if !self.entries.contains(&entry) {
-            self.entries.push(entry);
-            self.compiled = Compiled::build(&self.entries);
-            self.dirty = true;
-            self.generation = self.generation.wrapping_add(1);
-        }
-        Ok(())
-    }
-
-    // ── Query ─────────────────────────────────────────────────────────────────
-
-    /// Return `true` if `did_str` is permitted by this ACL.
-    ///
-    /// `did_str` is matched as:
-    /// - `did:ma:…#fragment` — full DID-URL
-    /// - `did:ma:…` — bare identity
-    /// - `#fragment` — bare fragment (no identity context)
-    ///
-    /// Deny always wins over allow. An identity-level deny blocks all
-    /// DID-URLs under that identity.
-    pub fn is_allowed(&self, did_str: &str) -> bool {
-        let c = &self.compiled;
-
-        // Bare fragment shortcut
-        if let Some(frag) = did_str.strip_prefix('#') {
-            if c.deny_fragments.contains(frag) {
-                return false;
-            }
-            if c.public {
-                return true;
-            }
-            return c.allow_fragments.contains(frag);
-        }
-
-        // Parse as DID (lenient — we already validated on insert)
-        let did = match Did::try_from(did_str) {
-            Ok(d) => d,
-            Err(_) => return false,
-        };
-
-        // Identity-level deny knocks out all DID-URLs under that identity
-        if c.deny_identities.contains(&did.ipns) {
-            return false;
-        }
-
-        if let Some(ref frag) = did.fragment {
-            // DID-URL deny
-            if c.deny_urls.contains(&(did.ipns.clone(), frag.clone())) {
-                return false;
-            }
-            if c.public {
-                return true;
-            }
-            // Allow by full DID-URL or by identity
-            if c.allow_urls.contains(&(did.ipns.clone(), frag.clone())) {
-                return true;
-            }
-            c.allow_identities.contains(&did.ipns)
-        } else {
-            // Bare identity check
-            if c.public {
-                return true;
-            }
-            c.allow_identities.contains(&did.ipns)
+impl Permissions {
+    /// Return `true` if this permission grants all bits in `required`.
+    pub const fn grants(self, required: u8) -> bool {
+        match self {
+            Self::Allow(p) => p & required == required,
+            Self::Deny => false,
         }
     }
 
-    // ── Serialisation ─────────────────────────────────────────────────────────
-
-    /// Serialise the ACL to a canonical YAML string.
-    ///
-    /// # Errors
-    /// Returns [`Error::Acl`] if serialisation fails (should not happen in
-    /// practice).
-    pub fn to_yaml(&self) -> Result<String> {
-        let strings: Vec<String> = self.entries.iter().map(entry_to_string).collect();
-        #[derive(serde::Serialize)]
-        struct Wrapper<'a> {
-            acl: &'a [String],
-        }
-        serde_yaml::to_string(&Wrapper { acl: &strings })
-            .map_err(|e| Error::Acl(format!("YAML serialisation error: {e}")))
-    }
-
-    // ── Publish bookkeeping ───────────────────────────────────────────────────
-
-    /// Record a successful publish.
-    ///
-    /// Only updates [`Acl::cid`] and clears [`Acl::dirty`] when `gen` matches
-    /// the current generation (i.e. no mutations happened between the publish
-    /// call and this confirmation).
-    pub fn mark_published(&mut self, cid: Cid, gen: u64) {
-        if gen == self.generation {
-            self.cid = Some(cid);
-            self.dirty = false;
-        }
-    }
-
-    /// Current generation counter.
-    ///
-    /// Increments on every mutating operation. Pass this value to
-    /// [`Acl::mark_published`] to guard against race conditions.
-    pub fn generation(&self) -> u64 {
-        self.generation
+    /// Return `true` if this is an explicit deny.
+    pub fn is_deny(self) -> bool {
+        self == Self::Deny
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-#[derive(Debug)]
-pub struct AclPublishWorker {
-    kubo_url: String,
-    ipns_key_name: String,
-    retry_delay: Duration,
-    publish_task: Option<JoinHandle<()>>,
+impl fmt::Display for Permissions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Deny => write!(f, "-"),
+            Self::Allow(p) => {
+                if p & PERM_R != 0 {
+                    write!(f, "r")?;
+                }
+                if p & PERM_W != 0 {
+                    write!(f, "w")?;
+                }
+                if p & PERM_X != 0 {
+                    write!(f, "x")?;
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-impl AclPublishWorker {
-    pub fn new(kubo_url: impl AsRef<str>, ipns_key_name: impl AsRef<str>) -> Result<Self> {
-        let kubo_url = kubo_url.as_ref().trim().to_string();
-        let ipns_key_name = ipns_key_name.as_ref().trim().to_string();
+impl FromStr for Permissions {
+    type Err = anyhow::Error;
 
-        if kubo_url.is_empty() {
-            return Err(Error::Acl("kubo_url must not be empty".to_string()));
+    fn from_str(s: &str) -> std::result::Result<Self, anyhow::Error> {
+        if s.is_empty() {
+            return Ok(Self::Deny);
         }
-        if ipns_key_name.is_empty() {
-            return Err(Error::Acl("ipns_key_name must not be empty".to_string()));
-        }
-
-        Ok(Self {
-            kubo_url,
-            ipns_key_name,
-            retry_delay: Duration::from_secs(2),
-            publish_task: None,
-        })
-    }
-
-    #[must_use]
-    pub fn with_retry_delay(mut self, retry_delay: Duration) -> Self {
-        self.retry_delay = retry_delay;
-        self
-    }
-
-    pub fn on_acl_changed(&mut self, acl: Arc<Mutex<Acl>>) {
-        if let Some(task) = self.publish_task.take() {
-            task.abort();
-        }
-
-        let kubo_url = self.kubo_url.clone();
-        let ipns_key_name = self.ipns_key_name.clone();
-        let retry_delay = self.retry_delay;
-
-        self.publish_task = Some(tokio::spawn(async move {
-            loop {
-                let snapshot = {
-                    let guard = match acl.lock() {
-                        Ok(guard) => guard,
-                        Err(_) => return,
-                    };
-
-                    if !guard.dirty {
-                        return;
-                    }
-
-                    let yaml = match guard.to_yaml() {
-                        Ok(yaml) => yaml,
-                        Err(_) => return,
-                    };
-
-                    (guard.generation(), yaml)
-                };
-
-                match publish_acl_once(&kubo_url, &ipns_key_name, &snapshot.1).await {
-                    Ok(cid) => {
-                        let mut guard = match acl.lock() {
-                            Ok(guard) => guard,
-                            Err(_) => return,
-                        };
-                        guard.mark_published(cid, snapshot.0);
-                        if !guard.dirty {
-                            return;
-                        }
-                    }
-                    Err(_) => {
-                        sleep(retry_delay).await;
-                    }
+        let mut bits = 0u8;
+        for ch in s.chars() {
+            match ch {
+                'r' => bits |= PERM_R,
+                'w' => bits |= PERM_W,
+                'x' => bits |= PERM_X,
+                other => {
+                    return Err(anyhow::anyhow!(
+                        "unknown permission character '{other}' in '{s}'"
+                    ));
                 }
             }
-        }));
+        }
+        if bits == 0 {
+            return Err(anyhow::anyhow!("permission string '{s}' has no valid bits"));
+        }
+        Ok(Self::Allow(bits))
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-impl Drop for AclPublishWorker {
-    fn drop(&mut self) {
-        if let Some(task) = self.publish_task.take() {
-            task.abort();
+impl Serialize for Permissions {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            Self::Deny => serializer.serialize_none(),
+            Self::Allow(_) => serializer.serialize_str(&self.to_string()),
         }
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-async fn publish_acl_once(kubo_url: &str, ipns_key_name: &str, yaml: &str) -> Result<Cid> {
-    let cid_str = ipfs_add(kubo_url, yaml.as_bytes().to_vec())
-        .await
-        .map_err(|e| Error::Acl(format!("ACL IPFS add failed: {e}")))?;
-
-    name_publish_with_retry(
-        kubo_url,
-        ipns_key_name,
-        &cid_str,
-        &IpnsPublishOptions::default(),
-        3,
-        Duration::from_secs(1),
-    )
-    .await
-    .map_err(|e| Error::Acl(format!("ACL IPNS publish failed: {e}")))?;
-
-    cid_str
-        .parse::<Cid>()
-        .map_err(|e| Error::Acl(format!("invalid CID from IPFS add: {e}")))
+impl<'de> Deserialize<'de> for Permissions {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let opt: Option<String> = Option::deserialize(deserializer)?;
+        match opt {
+            None => Ok(Self::Deny),
+            Some(s) if s.is_empty() => Ok(Self::Deny),
+            Some(s) => s.parse::<Permissions>().map_err(serde::de::Error::custom),
+        }
+    }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── AclMap ─────────────────────────────────────────────────────────────────────
 
-fn entry_to_string(e: &Entry) -> String {
-    match e {
-        Entry::Any => "*".to_owned(),
-        Entry::Allow(did) => did.id(),
-        Entry::Deny(did) => format!("!{}", did.id()),
-        Entry::AllowFragment(f) => format!("#{f}"),
-        Entry::DenyFragment(f) => format!("!#{f}"),
+/// Operation-level access control map.
+///
+/// Keys are principal strings: `"*"` (wildcard) or `"did:ma:…"` (bare
+/// identity). Values are [`Permissions`].
+pub type AclMap = BTreeMap<String, Permissions>;
+
+// ── check_op ───────────────────────────────────────────────────────────────────
+
+/// Check whether `caller` has `required` permission bits in `acl`.
+///
+/// 1. Normalise `caller` to a bare identity (strip fragment from DID-URLs).
+/// 2. Look up the normalised caller directly — if found, apply and stop.
+/// 3. Fall back to the `"*"` wildcard entry.
+/// 4. Explicit deny → `Err`; missing required bits → `Err`; no entry → `Err`.
+///
+/// Owner bypass is the caller's responsibility.
+#[cfg(feature = "acl")]
+pub fn check_op(acl: &AclMap, caller: &str, required: u8) -> Result<()> {
+    let normalized = normalize_principal(caller);
+    if let Some(direct) = acl.get(normalized) {
+        return if direct.is_deny() {
+            Err(Error::Acl(format!("operation denied for {caller}")))
+        } else if direct.grants(required) {
+            Ok(())
+        } else {
+            Err(Error::Acl(format!("permission denied for {caller}")))
+        };
     }
+
+    match acl.get("*") {
+        None => Err(Error::Acl(format!("no ACL entry for {caller}"))),
+        Some(e) if e.is_deny() => Err(Error::Acl(format!("operation denied for {caller}"))),
+        Some(e) if e.grants(required) => Ok(()),
+        Some(_) => Err(Error::Acl(format!("permission denied for {caller}"))),
+    }
+}
+
+/// Strip fragment from DID-URLs for principal normalisation.
+///
+/// `did:ma:foo#bar` → `did:ma:foo`. Non-DID strings (like `"*"`) are returned
+/// unchanged.
+pub fn normalize_principal(did: &str) -> &str {
+    if did.starts_with("did:") {
+        if let Some(pos) = did.find('#') {
+            return &did[..pos];
+        }
+    }
+    did
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -476,157 +205,109 @@ fn entry_to_string(e: &Entry) -> String {
 mod tests {
     use super::*;
 
-    fn public_yaml() -> &'static str {
-        "acl:\n  - \"*\"\n"
-    }
-
-    fn restricted_yaml() -> &'static str {
-        "acl:\n  - \"did:ma:Qmalice\"\n  - \"!did:ma:Qmeve\"\n"
-    }
-
-    // ── new_from_yaml ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn parse_public() {
-        let acl = Acl::new_from_yaml(public_yaml()).unwrap();
-        assert!(acl.compiled.public);
-        assert!(acl.dirty);
+    fn m(entries: &[(&str, &str)]) -> AclMap {
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.parse().expect("valid permissions")))
+            .collect()
     }
 
     #[test]
-    fn parse_restricted() {
-        let acl = Acl::new_from_yaml(restricted_yaml()).unwrap();
-        assert!(!acl.compiled.public);
-        assert!(acl.compiled.allow_identities.contains("Qmalice"));
-        assert!(acl.compiled.deny_identities.contains("Qmeve"));
+    fn wildcard_exec_allows_execute() {
+        let acl = m(&[("*", "x")]);
+        assert!(check_op(&acl, "did:ma:alice", PERM_X).is_ok());
     }
 
     #[test]
-    fn parse_fragments() {
-        let yaml = "acl:\n  - \"#read\"\n  - \"!#write\"\n";
-        let acl = Acl::new_from_yaml(yaml).unwrap();
-        assert!(acl.compiled.allow_fragments.contains("read"));
-        assert!(acl.compiled.deny_fragments.contains("write"));
+    fn wildcard_exec_denies_write() {
+        let acl = m(&[("*", "x")]);
+        assert!(check_op(&acl, "did:ma:alice", PERM_W).is_err());
     }
 
     #[test]
-    fn parse_did_url() {
-        let yaml = "acl:\n  - \"did:ma:Qmalice#edit\"\n";
-        let acl = Acl::new_from_yaml(yaml).unwrap();
-        assert!(acl
-            .compiled
-            .allow_urls
-            .contains(&("Qmalice".to_owned(), "edit".to_owned())));
+    fn explicit_deny_wins_over_wildcard_allow() {
+        let acl = m(&[("*", "rwx"), ("did:ma:bandit", "")]);
+        assert!(check_op(&acl, "did:ma:bandit", PERM_X).is_err());
     }
 
     #[test]
-    fn parse_unknown_entry_fails() {
-        let yaml = "acl:\n  - \"ftp://bad\"\n";
-        assert!(Acl::new_from_yaml(yaml).is_err());
-    }
-
-    // ── is_allowed ────────────────────────────────────────────────────────────
-
-    #[test]
-    fn public_allows_all() {
-        let acl = Acl::new_from_yaml(public_yaml()).unwrap();
-        assert!(acl.is_allowed("did:ma:Qmanyone#read"));
-        assert!(acl.is_allowed("did:ma:Qmanyone"));
+    fn exact_match_restricts_below_wildcard() {
+        let acl = m(&[("*", "rwx"), ("did:ma:bob", "r")]);
+        assert!(check_op(&acl, "did:ma:bob", PERM_R).is_ok());
+        assert!(check_op(&acl, "did:ma:bob", PERM_X).is_err());
     }
 
     #[test]
-    fn deny_identity_blocks_all_urls() {
-        let acl = Acl::new_from_yaml("acl:\n  - \"*\"\n  - \"!did:ma:Qmeve\"\n").unwrap();
-        assert!(!acl.is_allowed("did:ma:Qmeve"));
-        assert!(!acl.is_allowed("did:ma:Qmeve#read"));
+    fn did_url_caller_is_normalized() {
+        let acl = m(&[("did:ma:alice", "rwx")]);
+        assert!(check_op(&acl, "did:ma:alice#sign", PERM_X).is_ok());
     }
 
     #[test]
-    fn allow_identity_permits_urls() {
-        let acl = Acl::new_from_yaml(restricted_yaml()).unwrap();
-        assert!(acl.is_allowed("did:ma:Qmalice"));
-        assert!(acl.is_allowed("did:ma:Qmalice#edit"));
+    fn no_entry_default_deny() {
+        assert!(check_op(&AclMap::new(), "did:ma:anyone", PERM_X).is_err());
     }
 
     #[test]
-    fn unknown_identity_denied_in_restricted() {
-        let acl = Acl::new_from_yaml(restricted_yaml()).unwrap();
-        assert!(!acl.is_allowed("did:ma:Qmbob"));
+    fn wildcard_deny_blocks_all() {
+        let acl = m(&[("*", "")]);
+        assert!(check_op(&acl, "did:ma:anyone", PERM_X).is_err());
     }
 
     #[test]
-    fn bare_fragment_allow_deny() {
-        let acl = Acl::new_from_yaml("acl:\n  - \"#read\"\n  - \"!#write\"\n").unwrap();
-        assert!(acl.is_allowed("#read"));
-        assert!(!acl.is_allowed("#write"));
-        assert!(!acl.is_allowed("#other"));
-    }
-
-    // ── allow / deny mutators ─────────────────────────────────────────────────
-
-    #[test]
-    fn allow_mutator_idempotent() {
-        let mut acl = Acl::new_from_yaml("acl: []\n").unwrap();
-        let gen0 = acl.generation();
-        acl.allow("did:ma:Qmbob").unwrap();
-        let gen1 = acl.generation();
-        acl.allow("did:ma:Qmbob").unwrap(); // duplicate — no change
-        assert_eq!(acl.generation(), gen1);
-        assert!(gen1 > gen0);
-        assert!(acl.is_allowed("did:ma:Qmbob"));
+    fn normalize_strips_fragment() {
+        assert_eq!(normalize_principal("did:ma:foo#bar"), "did:ma:foo");
+        assert_eq!(normalize_principal("did:ma:foo"), "did:ma:foo");
+        assert_eq!(normalize_principal("*"), "*");
     }
 
     #[test]
-    fn deny_mutator() {
-        let mut acl = Acl::new_from_yaml("acl:\n  - \"*\"\n").unwrap();
-        acl.deny("did:ma:Qmeve").unwrap();
-        assert!(acl.dirty);
-        assert!(!acl.is_allowed("did:ma:Qmeve"));
+    fn permissions_display() {
+        assert_eq!(Permissions::Allow(PERM_RWX).to_string(), "rwx");
+        assert_eq!(Permissions::Allow(PERM_R | PERM_X).to_string(), "rx");
+        assert_eq!(Permissions::Allow(PERM_X).to_string(), "x");
+        assert_eq!(Permissions::Deny.to_string(), "-");
     }
 
     #[test]
-    fn deny_mutator_with_bang_prefix() {
-        let mut acl = Acl::new_from_yaml("acl:\n  - \"*\"\n").unwrap();
-        acl.deny("!did:ma:Qmeve").unwrap(); // leading `!` is stripped
-        assert!(!acl.is_allowed("did:ma:Qmeve"));
+    fn permissions_from_str() {
+        assert_eq!(
+            "rwx".parse::<Permissions>().unwrap(),
+            Permissions::Allow(PERM_RWX)
+        );
+        assert_eq!(
+            "rx".parse::<Permissions>().unwrap(),
+            Permissions::Allow(PERM_R | PERM_X)
+        );
+        assert_eq!(
+            "x".parse::<Permissions>().unwrap(),
+            Permissions::Allow(PERM_X)
+        );
+        assert_eq!("".parse::<Permissions>().unwrap(), Permissions::Deny);
+        assert!("z".parse::<Permissions>().is_err());
     }
 
-    // ── to_yaml round-trip ────────────────────────────────────────────────────
-
+    #[cfg(feature = "acl")]
     #[test]
-    fn yaml_round_trip() {
-        let yaml = "acl:\n  - \"*\"\n  - did:ma:Qmalice\n  - '!did:ma:Qmeve'\n";
-        let acl = Acl::new_from_yaml(yaml).unwrap();
-        let out = acl.to_yaml().unwrap();
-        let acl2 = Acl::new_from_yaml(&out).unwrap();
-        // Re-serialise must produce the same entries
-        assert_eq!(acl.entries, acl2.entries);
+    fn permissions_serde_roundtrip() {
+        let acl: AclMap = [
+            ("*".to_string(), Permissions::Allow(PERM_RWX)),
+            ("did:ma:bandit".to_string(), Permissions::Deny),
+        ]
+        .into_iter()
+        .collect();
+        let yaml = serde_yaml::to_string(&acl).unwrap();
+        let roundtrip: AclMap = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(acl, roundtrip);
     }
 
-    // ── mark_published ────────────────────────────────────────────────────────
-
+    #[cfg(feature = "acl")]
     #[test]
-    fn mark_published_clears_dirty() {
-        let mut acl = Acl::new_from_yaml(public_yaml()).unwrap();
-        let gen = acl.generation();
-        let cid: Cid = "bafyreigdmqpykrgxyaxtlafqpqhzrb7qy2rh75nldvfd4aq3b6b2x6xkhu"
-            .parse()
-            .unwrap();
-        acl.mark_published(cid, gen);
-        assert!(!acl.dirty);
-        assert!(acl.cid.is_some());
-    }
-
-    #[test]
-    fn mark_published_stale_gen_noop() {
-        let mut acl = Acl::new_from_yaml(public_yaml()).unwrap();
-        let old_gen = acl.generation();
-        acl.allow("did:ma:Qmbob").unwrap(); // bumps generation
-        let cid: Cid = "bafyreigdmqpykrgxyaxtlafqpqhzrb7qy2rh75nldvfd4aq3b6b2x6xkhu"
-            .parse()
-            .unwrap();
-        acl.mark_published(cid, old_gen); // stale — must be ignored
-        assert!(acl.dirty);
-        assert!(acl.cid.is_none());
+    fn yaml_null_deserializes_to_deny() {
+        // YAML tilde (~) is canonical null
+        let yaml = "'did:ma:x': ~\n'*': rwx\n";
+        let acl: AclMap = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(acl.get("did:ma:x"), Some(&Permissions::Deny));
+        assert_eq!(acl.get("*"), Some(&Permissions::Allow(PERM_RWX)));
     }
 }

@@ -180,7 +180,7 @@ impl Message {
         to: impl Into<String>,
         message_type: impl Into<String>,
         content_type: impl Into<String>,
-        content: Vec<u8>,
+        content: &[u8],
         signing_key: &SigningKey,
     ) -> Result<Self> {
         let exp = now_unix_nanos()? + DEFAULT_MESSAGE_TTL_SECS * 1_000_000_000;
@@ -189,7 +189,7 @@ impl Message {
             to,
             message_type,
             content_type,
-            content,
+            &content,
             exp,
             signing_key,
         )
@@ -200,12 +200,12 @@ impl Message {
         to: impl Into<String>,
         message_type: impl Into<String>,
         content_type: impl Into<String>,
-        content: Vec<u8>,
+        content: &[u8],
         exp: u64,
         signing_key: &SigningKey,
     ) -> Result<Self> {
         let content_type_str: String = content_type.into();
-        let encoded = encode_content(codec_for(&content_type_str), &content);
+        let encoded = encode_content(codec_for(&content_type_str), content);
         let mut message = Self {
             id: nanoid!(),
             protocol: default_protocol(),
@@ -919,7 +919,7 @@ mod tests {
             recipient_document.id.clone(),
             "application/x-ma-message",
             "text/plain",
-            b"look".to_vec(),
+            b"look",
             now_nanos + 60_000_000_000,
             &sender_signing,
         )
