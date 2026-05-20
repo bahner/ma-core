@@ -15,33 +15,39 @@
 //! | `"create"` | Create new namespaces or entities |
 //! | `"update"` | Update existing namespaces or entities |
 //! | `"delete"` | Delete namespaces or entities |
-//! | `"owner"`  | Full access at this level (semantics enforced by caller) |
+//! | `"*"`      | Wildcard — grants **all** capabilities at this level |
 //!
 //! Entity and namespace ACLs may also use arbitrary capability strings that
 //! correspond to verb names or sub-namespace names.
 //!
-//! # Principal key forms
+//! # Key forms in an [`AclMap`]
 //!
-//! Valid keys in an [`AclMap`] (and in YAML) are exactly:
+//! An `AclMap` supports two kinds of entries:
+//!
+//! **Principal entries** — key identifies *who*:
 //!
 //! | Form | Meaning |
 //! |------|---------|
 //! | `"*"` | Wildcard — matches any caller |
-//! | `"did:ma:<identity>"` | Bare DID — a remote runtime identity (no fragment) |
+//! | `"did:ma:<identity>"` | Bare DID (no fragment) |
 //! | `"#<local>"` | Local entity identifier |
 //! | `"group:<handle>.<name>"` | Named group of principals |
 //!
-//! DID-URLs with fragments (`did:ma:foo#bar`) are **not** valid keys.
-//! Use [`is_valid_acl_key`] to validate keys before inserting them.
+//! **Capability-grant entries** — key identifies *what*, value lists *who*:
+//!
+//! Plain words (e.g. `"fortune"`, `"admin"`) as keys map a capability name
+//! to a comma-separated list of group/DID references.
+//! These are resolved by the runtime's async ACL checker; [`check_cap`] skips them.
 //!
 //! # YAML format
 //!
 //! ```yaml
 //! acl:
-//!   "*": [rpc, create]        # everyone: RPC + create
-//!   "did:ma:alice": [owner]   # alice: full access
-//!   "did:ma:bob": [rpc, read] # bob: read-only RPC
-//!   "did:ma:eve":             # null / absent → explicit deny
+//!   "*": [rpc, create]                     # everyone: RPC + create
+//!   "did:ma:alice": ["*"]                   # alice: all capabilities
+//!   "did:ma:bob": [rpc, read]              # bob: restricted
+//!   "did:ma:eve":                          # null / absent → explicit deny
+//!   fortune: "group:carlotta.friends,did:ma:dave"  # cap-grant entry
 //! ```
 //!
 //! # Example
@@ -76,21 +82,26 @@ pub const CAP_CREATE: &str = "create";
 pub const CAP_UPDATE: &str = "update";
 /// Delete namespaces or entities.
 pub const CAP_DELETE: &str = "delete";
-/// Full access at this level — semantics are enforced by the caller, not by [`check_cap`].
-pub const CAP_OWNER: &str = "owner";
 
 // ── CapabilityEntry ────────────────────────────────────────────────────────────
 
-/// Capability set for a principal in an [`AclMap`].
+/// Capability set for a principal in an [`AclMap`], or a grantee list for a
+/// capability-grant entry.
 ///
-/// Serialises as a YAML sequence of capability strings (`["rpc", "create"]`)
-/// or `null` for an explicit deny.
+/// Serialises as:
+/// - `null` → [`Deny`](CapabilityEntry::Deny)
+/// - YAML sequence → [`Allow`](CapabilityEntry::Allow)
+/// - comma-separated string → [`Grant`](CapabilityEntry::Grant)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapabilityEntry {
     /// Explicit deny. Wins over any wildcard allow for the same principal.
     Deny,
-    /// Allow the listed capabilities. An empty set behaves like `Deny`.
+    /// Allow the listed capabilities. `["*"]` grants all capabilities.
     Allow(BTreeSet<String>),
+    /// Capability-grant entry: the listed group/DID refs may use this capability.
+    /// Stored as a comma-separated string in YAML.
+    /// Resolved lazily by the runtime's async ACL checker; [`check_cap`] skips these.
+    Grant(Vec<String>),
 }
 
 impl CapabilityEntry {
@@ -104,16 +115,26 @@ impl CapabilityEntry {
     }
 
     /// Return `true` if this entry grants `cap`.
+    /// `"*"` in the capability set grants any capability.
     pub fn has(&self, cap: &str) -> bool {
         match self {
-            Self::Deny => false,
-            Self::Allow(caps) => caps.contains(cap),
+            Self::Deny | Self::Grant(_) => false,
+            Self::Allow(caps) => caps.contains(cap) || caps.contains("*"),
         }
     }
 
     /// Return `true` if this is an explicit deny.
     pub fn is_deny(&self) -> bool {
         matches!(self, Self::Deny)
+    }
+
+    /// Return the grantee refs if this is a [`Grant`](Self::Grant) entry.
+    pub fn grantees(&self) -> Option<&[String]> {
+        if let Self::Grant(refs) = self {
+            Some(refs)
+        } else {
+            None
+        }
     }
 }
 
@@ -129,17 +150,36 @@ impl Serialize for CapabilityEntry {
                 }
                 seq.end()
             }
+            Self::Grant(refs) => serializer.serialize_str(&refs.join(",")),
         }
     }
 }
 
 impl<'de> Deserialize<'de> for CapabilityEntry {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        let opt: Option<Vec<String>> = Option::deserialize(deserializer)?;
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Str(String),
+            Seq(Vec<String>),
+        }
+        let opt: Option<Raw> = Option::deserialize(deserializer)?;
         match opt {
             None => Ok(Self::Deny),
-            Some(v) if v.is_empty() => Ok(Self::Deny),
-            Some(v) => Ok(Self::Allow(v.into_iter().collect())),
+            Some(Raw::Seq(v)) if v.is_empty() => Ok(Self::Deny),
+            Some(Raw::Seq(v)) => Ok(Self::Allow(v.into_iter().collect())),
+            Some(Raw::Str(s)) => {
+                let refs: Vec<String> = s
+                    .split(',')
+                    .map(|r| r.trim().to_string())
+                    .filter(|r| !r.is_empty())
+                    .collect();
+                if refs.is_empty() {
+                    Ok(Self::Deny)
+                } else {
+                    Ok(Self::Grant(refs))
+                }
+            }
         }
     }
 }
@@ -162,44 +202,62 @@ pub type AclMap = HashMap<String, CapabilityEntry>;
 
 /// Check whether `caller` has capability `cap` in `acl`.
 ///
-/// 1. Normalise `caller` to a bare identity (strip fragment from DID-URLs).
-/// 2. Look up the normalised caller directly — if found, apply and stop.
-/// 3. Fall back to the `"*"` wildcard entry.
+/// 1. Normalise `caller` (strip fragment from DID-URLs).
+/// 2. Look up the normalised caller directly — if a principal entry, apply and stop.
+/// 3. Fall back to the `"*"` wildcard principal entry.
 /// 4. Explicit deny → `Err`; capability absent → `Err`; no entry → `Err`.
 ///
-/// The `"owner"` capability is just a string — callers that need owner-bypass
-/// semantics must call `check_cap(acl, caller, CAP_OWNER)` explicitly.
+/// [`Grant`](CapabilityEntry::Grant) entries (capability→grantees) are **skipped**;
+/// they are resolved by the runtime's async `acl_check` via lazy IPFS lookups.
+///
+/// A `"*"` item inside an `Allow` set grants **all** capabilities.
 #[cfg(feature = "acl")]
 pub fn check_cap(acl: &AclMap, caller: &str, cap: &str) -> Result<()> {
     let normalized = normalize_principal(caller);
     if let Some(direct) = acl.get(normalized) {
-        return match direct {
-            CapabilityEntry::Deny => Err(Error::Acl(format!("operation denied for {caller}"))),
-            CapabilityEntry::Allow(caps) if caps.contains(cap) => Ok(()),
-            CapabilityEntry::Allow(_) => Err(Error::Acl(format!(
-                "capability '{cap}' denied for {caller}"
-            ))),
-        };
+        match direct {
+            CapabilityEntry::Deny => {
+                return Err(Error::Acl(format!("operation denied for {caller}")));
+            }
+            CapabilityEntry::Allow(caps) if caps.contains(cap) || caps.contains("*") => {
+                return Ok(());
+            }
+            CapabilityEntry::Allow(_) => {
+                return Err(Error::Acl(format!(
+                    "capability '{cap}' denied for {caller}"
+                )));
+            }
+            CapabilityEntry::Grant(_) => {
+                // Capability-grant entry under a principal key — should not
+                // happen in practice. Ignore and fall through to wildcard.
+            }
+        }
     }
 
     match acl.get("*") {
-        None => Err(Error::Acl(format!("no ACL entry for {caller}"))),
+        Some(CapabilityEntry::Grant(_)) | None => {
+            Err(Error::Acl(format!("no ACL entry for {caller}")))
+        }
         Some(CapabilityEntry::Deny) => Err(Error::Acl(format!("operation denied for {caller}"))),
-        Some(CapabilityEntry::Allow(caps)) if caps.contains(cap) => Ok(()),
+        Some(CapabilityEntry::Allow(caps)) if caps.contains(cap) || caps.contains("*") => Ok(()),
         Some(CapabilityEntry::Allow(_)) => Err(Error::Acl(format!(
             "capability '{cap}' denied for {caller}"
         ))),
     }
 }
 
-/// Return `true` if `key` is a valid [`AclMap`] principal key.
+/// Return `true` if `key` is a valid [`AclMap`] key.
 ///
-/// Valid forms:
-/// - `"*"` — wildcard
-/// - `"did:ma:<identity>"` — bare DID, no fragment
-/// - `"#<local>"` — local entity identifier
-/// - `"group:<handle>.<name>"` — named group (`<handle>` and `<name>` non-empty)
+/// Two kinds of keys are valid:
+/// - **Principal keys**: `"*"`, `"did:ma:<id>"`, `"#<local>"`, `"group:<h>.<n>"`
+/// - **Capability-grant keys**: any non-empty word not matching a principal key
+///   (e.g. `"fortune"`, `"admin"`, `"emote"`)
 pub fn is_valid_acl_key(key: &str) -> bool {
+    !key.is_empty()
+}
+
+/// Return `true` if `key` is a principal key (identifies *who*).
+pub fn is_principal_key(key: &str) -> bool {
     key == "*"
         || (key.starts_with("did:") && !key.contains('#'))
         || (key.starts_with('#') && key.len() > 1)
@@ -227,8 +285,7 @@ pub fn validate_acl_map(acl: &AclMap) -> Result<()> {
     for key in acl.keys() {
         if !is_valid_acl_key(key) {
             return Err(Error::Acl(format!(
-                "invalid ACL key {key:?}: must be \"*\", a bare DID (\"did:ma:\u{2026}\"), \
-                 a local entity (\"#name\"), or a group (\"group:<handle>.<name>\")"
+                "invalid ACL key {key:?}: key must be non-empty"
             )));
         }
     }
@@ -330,10 +387,43 @@ mod tests {
     }
 
     #[test]
+    fn wildcard_cap_grants_all_capabilities() {
+        let acl = m(&[("did:ma:alice", allow(&["*"]))]);
+        assert!(check_cap(&acl, "did:ma:alice", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "did:ma:alice", CAP_IPFS).is_ok());
+        assert!(check_cap(&acl, "did:ma:alice", "emote").is_ok());
+        assert!(check_cap(&acl, "did:ma:alice", "admin").is_ok());
+    }
+
+    #[test]
+    fn grant_entry_is_skipped_by_check_cap() {
+        let mut acl = AclMap::new();
+        acl.insert("*".to_string(), allow(&[CAP_RPC]));
+        acl.insert(
+            "fortune".to_string(),
+            CapabilityEntry::Grant(vec!["group:carlotta.friends".to_string()]),
+        );
+        assert!(check_cap(&acl, "did:ma:anyone", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "did:ma:anyone", "fortune").is_err());
+    }
+
+    #[test]
+    fn grant_entry_serde_round_trip() {
+        let entry = CapabilityEntry::Grant(vec![
+            "group:carlotta.friends".to_string(),
+            "did:ma:alice".to_string(),
+        ]);
+        let yaml = serde_yaml::to_string(&entry).expect("serialize");
+        assert!(yaml.contains("group:carlotta.friends"));
+        let round: CapabilityEntry = serde_yaml::from_str(yaml.trim()).expect("deserialize");
+        assert_eq!(round, entry);
+    }
+
+    #[test]
     fn owner_capability_is_just_a_string() {
-        // "owner" semantics (implies all) are the caller's responsibility
-        let acl = m(&[("did:ma:alice", allow(&[CAP_OWNER]))]);
-        assert!(check_cap(&acl, "did:ma:alice", CAP_OWNER).is_ok());
+        // "owner" still works as a plain capability string
+        let acl = m(&[("did:ma:alice", allow(&["owner"]))]);
+        assert!(check_cap(&acl, "did:ma:alice", "owner").is_ok());
         assert!(check_cap(&acl, "did:ma:alice", CAP_RPC).is_err());
     }
 
@@ -352,12 +442,11 @@ mod tests {
         assert!(is_valid_acl_key("#agent"));
         assert!(is_valid_acl_key("group:alice.venner"));
         assert!(is_valid_acl_key("group:runtime.admins"));
-        assert!(!is_valid_acl_key("did:ma:Qmfoo#sign"));
-        assert!(!is_valid_acl_key("#"));
+        // capability-grant keys (plain words)
+        assert!(is_valid_acl_key("fortune"));
+        assert!(is_valid_acl_key("admin"));
+        assert!(is_valid_acl_key("emote"));
         assert!(!is_valid_acl_key(""));
-        assert!(!is_valid_acl_key("group:noname"));
-        assert!(!is_valid_acl_key("group:.nohandle"));
-        assert!(!is_valid_acl_key("group:handle."));
     }
 
     #[cfg(feature = "acl")]
