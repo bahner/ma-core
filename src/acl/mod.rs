@@ -1,15 +1,24 @@
-//! Operation-level access control for ma identities.
+//! Capability-based access control for ma identities.
 //!
-//! An [`AclMap`] maps principal strings to [`Permissions`].
+//! An [`AclMap`] maps principal strings to [`CapabilityEntry`] values.
 //! Deny always wins over allow; a wildcard deny closes access to everyone.
 //!
-//! # Permission bits
+//! # Capabilities
 //!
-//! | Letter | Bit | Meaning |
-//! |--------|-----|---------|
-//! | `r`    |  4  | Read — list metadata, read config, fetch entities |
-//! | `w`    |  2  | Write — mutate entities/config; required for `/ma/ipfs/0.0.1` |
-//! | `x`    |  1  | Execute — invoke entity verbs; required for `/ma/rpc/0.0.1` |
+//! Capabilities are plain strings. Built-in system capabilities:
+//!
+//! | Capability | Meaning |
+//! |------------|---------|
+//! | `"rpc"`    | Send RPC messages via `/ma/rpc/0.0.1` |
+//! | `"ipfs"`   | Publish DID documents via `/ma/ipfs/0.0.1` |
+//! | `"read"`   | Read entities, config, and namespace contents |
+//! | `"create"` | Create new namespaces or entities |
+//! | `"update"` | Update existing namespaces or entities |
+//! | `"delete"` | Delete namespaces or entities |
+//! | `"owner"`  | Full access at this level (semantics enforced by caller) |
+//!
+//! Entity and namespace ACLs may also use arbitrary capability strings that
+//! correspond to verb names or sub-namespace names.
 //!
 //! # Principal key forms
 //!
@@ -29,142 +38,115 @@
 //!
 //! ```yaml
 //! acl:
-//!   "*": "rwx"          # everyone: full access
-//!   "did:ma:bob": "rx"  # read + execute, no write
-//!   "#local-agent":     # local entity — explicit deny
-//!   "did:ma:eve":       # null / absent → explicit deny
+//!   "*": [rpc, create]        # everyone: RPC + create
+//!   "did:ma:alice": [owner]   # alice: full access
+//!   "did:ma:bob": [rpc, read] # bob: read-only RPC
+//!   "did:ma:eve":             # null / absent → explicit deny
 //! ```
 //!
 //! # Example
 //!
 //! ```rust
-//! # use ma_core::{AclMap, Permissions, check_op, PERM_X};
+//! # use ma_core::{AclMap, CapabilityEntry, check_cap, CAP_RPC};
 //! let mut acl = AclMap::new();
-//! acl.insert("*".to_string(), Permissions::Allow(PERM_X));
-//! acl.insert("did:ma:Qmevil".to_string(), Permissions::Deny);
-//! assert!(check_op(&acl, "did:ma:Qmgood", PERM_X).is_ok());
-//! assert!(check_op(&acl, "did:ma:Qmevil", PERM_X).is_err());
+//! acl.insert("*".to_string(), CapabilityEntry::from_caps(["rpc"]));
+//! acl.insert("did:ma:Qmevil".to_string(), CapabilityEntry::Deny);
+//! assert!(check_cap(&acl, "did:ma:Qmgood", CAP_RPC).is_ok());
+//! assert!(check_cap(&acl, "did:ma:Qmevil", CAP_RPC).is_err());
 //! ```
 
-use std::collections::HashMap;
-use std::fmt;
-use std::str::FromStr;
+use std::collections::{BTreeSet, HashMap};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[cfg(feature = "acl")]
 use crate::{Error, Result};
 
-// ── Permission bits ────────────────────────────────────────────────────────────
+// ── Capability constants ───────────────────────────────────────────────────────
 
-/// Read permission: list metadata, read config, fetch entities.
-pub const PERM_R: u8 = 0b100;
-/// Write permission: mutate entities and config; required for `/ma/ipfs/0.0.1`.
-pub const PERM_W: u8 = 0b010;
-/// Execute permission: invoke entity verbs; required for `/ma/rpc/0.0.1`.
-pub const PERM_X: u8 = 0b001;
-/// All permissions combined.
-pub const PERM_RWX: u8 = 0b111;
+/// Send RPC messages via `/ma/rpc/0.0.1`.
+pub const CAP_RPC: &str = "rpc";
+/// Publish DID documents via `/ma/ipfs/0.0.1`.
+pub const CAP_IPFS: &str = "ipfs";
+/// Read entities, config, and namespace contents.
+pub const CAP_READ: &str = "read";
+/// Create new namespaces or entities.
+pub const CAP_CREATE: &str = "create";
+/// Update existing namespaces or entities.
+pub const CAP_UPDATE: &str = "update";
+/// Delete namespaces or entities.
+pub const CAP_DELETE: &str = "delete";
+/// Full access at this level — semantics are enforced by the caller, not by [`check_cap`].
+pub const CAP_OWNER: &str = "owner";
 
-// ── Permissions type ───────────────────────────────────────────────────────────
+// ── CapabilityEntry ────────────────────────────────────────────────────────────
 
-/// Permission value for a principal in an [`AclMap`].
+/// Capability set for a principal in an [`AclMap`].
 ///
-/// Serialises as a permission string (`"rwx"`, `"rx"`, `"x"`, …) or YAML
-/// `null` for deny.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Permissions {
+/// Serialises as a YAML sequence of capability strings (`["rpc", "create"]`)
+/// or `null` for an explicit deny.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapabilityEntry {
     /// Explicit deny. Wins over any wildcard allow for the same principal.
     Deny,
-    /// Allow with the given `r`/`w`/`x` bits.
-    Allow(u8),
+    /// Allow the listed capabilities. An empty set behaves like `Deny`.
+    Allow(BTreeSet<String>),
 }
 
-impl Permissions {
-    /// Return `true` if this permission grants all bits in `required`.
-    pub const fn grants(self, required: u8) -> bool {
+impl CapabilityEntry {
+    /// Construct an `Allow` entry from an iterator of capability name strings.
+    pub fn from_caps<I, S>(caps: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self::Allow(caps.into_iter().map(Into::into).collect())
+    }
+
+    /// Return `true` if this entry grants `cap`.
+    pub fn has(&self, cap: &str) -> bool {
         match self {
-            Self::Allow(p) => p & required == required,
             Self::Deny => false,
+            Self::Allow(caps) => caps.contains(cap),
         }
     }
 
     /// Return `true` if this is an explicit deny.
-    pub fn is_deny(self) -> bool {
-        self == Self::Deny
+    pub fn is_deny(&self) -> bool {
+        matches!(self, Self::Deny)
     }
 }
 
-impl fmt::Display for Permissions {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Deny => write!(f, "-"),
-            Self::Allow(p) => {
-                if p & PERM_R != 0 {
-                    write!(f, "r")?;
-                }
-                if p & PERM_W != 0 {
-                    write!(f, "w")?;
-                }
-                if p & PERM_X != 0 {
-                    write!(f, "x")?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-impl FromStr for Permissions {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> std::result::Result<Self, anyhow::Error> {
-        if s.is_empty() {
-            return Ok(Self::Deny);
-        }
-        let mut bits = 0u8;
-        for ch in s.chars() {
-            match ch {
-                'r' => bits |= PERM_R,
-                'w' => bits |= PERM_W,
-                'x' => bits |= PERM_X,
-                other => {
-                    return Err(anyhow::anyhow!(
-                        "unknown permission character '{other}' in '{s}'"
-                    ));
-                }
-            }
-        }
-        if bits == 0 {
-            return Err(anyhow::anyhow!("permission string '{s}' has no valid bits"));
-        }
-        Ok(Self::Allow(bits))
-    }
-}
-
-impl Serialize for Permissions {
+impl Serialize for CapabilityEntry {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         match self {
             Self::Deny => serializer.serialize_none(),
-            Self::Allow(_) => serializer.serialize_str(&self.to_string()),
+            Self::Allow(caps) => {
+                use serde::ser::SerializeSeq;
+                let mut seq = serializer.serialize_seq(Some(caps.len()))?;
+                for cap in caps {
+                    seq.serialize_element(cap)?;
+                }
+                seq.end()
+            }
         }
     }
 }
 
-impl<'de> Deserialize<'de> for Permissions {
+impl<'de> Deserialize<'de> for CapabilityEntry {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        let opt: Option<String> = Option::deserialize(deserializer)?;
+        let opt: Option<Vec<String>> = Option::deserialize(deserializer)?;
         match opt {
             None => Ok(Self::Deny),
-            Some(s) if s.is_empty() => Ok(Self::Deny),
-            Some(s) => s.parse::<Permissions>().map_err(serde::de::Error::custom),
+            Some(v) if v.is_empty() => Ok(Self::Deny),
+            Some(v) => Ok(Self::Allow(v.into_iter().collect())),
         }
     }
 }
 
 // ── AclMap ─────────────────────────────────────────────────────────────────────
 
-/// Operation-level access control map.
+/// Capability-based access control map.
 ///
 /// Keys are principal strings — exactly one of:
 /// - `"*"` — wildcard
@@ -174,36 +156,39 @@ impl<'de> Deserialize<'de> for Permissions {
 ///
 /// DID-URLs with fragments (`did:ma:foo#bar`) are **not** valid keys;
 /// use [`is_valid_acl_key`] to validate before inserting.
-pub type AclMap = HashMap<String, Permissions>;
+pub type AclMap = HashMap<String, CapabilityEntry>;
 
-// ── check_op ───────────────────────────────────────────────────────────────────
+// ── check_cap ──────────────────────────────────────────────────────────────────
 
-/// Check whether `caller` has `required` permission bits in `acl`.
+/// Check whether `caller` has capability `cap` in `acl`.
 ///
 /// 1. Normalise `caller` to a bare identity (strip fragment from DID-URLs).
 /// 2. Look up the normalised caller directly — if found, apply and stop.
 /// 3. Fall back to the `"*"` wildcard entry.
-/// 4. Explicit deny → `Err`; missing required bits → `Err`; no entry → `Err`.
+/// 4. Explicit deny → `Err`; capability absent → `Err`; no entry → `Err`.
 ///
-/// Owner bypass is the caller's responsibility.
+/// The `"owner"` capability is just a string — callers that need owner-bypass
+/// semantics must call `check_cap(acl, caller, CAP_OWNER)` explicitly.
 #[cfg(feature = "acl")]
-pub fn check_op(acl: &AclMap, caller: &str, required: u8) -> Result<()> {
+pub fn check_cap(acl: &AclMap, caller: &str, cap: &str) -> Result<()> {
     let normalized = normalize_principal(caller);
     if let Some(direct) = acl.get(normalized) {
-        return if direct.is_deny() {
-            Err(Error::Acl(format!("operation denied for {caller}")))
-        } else if direct.grants(required) {
-            Ok(())
-        } else {
-            Err(Error::Acl(format!("permission denied for {caller}")))
+        return match direct {
+            CapabilityEntry::Deny => Err(Error::Acl(format!("operation denied for {caller}"))),
+            CapabilityEntry::Allow(caps) if caps.contains(cap) => Ok(()),
+            CapabilityEntry::Allow(_) => Err(Error::Acl(format!(
+                "capability '{cap}' denied for {caller}"
+            ))),
         };
     }
 
     match acl.get("*") {
         None => Err(Error::Acl(format!("no ACL entry for {caller}"))),
-        Some(e) if e.is_deny() => Err(Error::Acl(format!("operation denied for {caller}"))),
-        Some(e) if e.grants(required) => Ok(()),
-        Some(_) => Err(Error::Acl(format!("permission denied for {caller}"))),
+        Some(CapabilityEntry::Deny) => Err(Error::Acl(format!("operation denied for {caller}"))),
+        Some(CapabilityEntry::Allow(caps)) if caps.contains(cap) => Ok(()),
+        Some(CapabilityEntry::Allow(_)) => Err(Error::Acl(format!(
+            "capability '{cap}' denied for {caller}"
+        ))),
     }
 }
 
@@ -270,60 +255,86 @@ pub fn normalize_principal(did: &str) -> &str {
 mod tests {
     use super::*;
 
-    fn m(entries: &[(&str, &str)]) -> AclMap {
+    fn allow(caps: &[&str]) -> CapabilityEntry {
+        CapabilityEntry::from_caps(caps.iter().copied())
+    }
+
+    fn m(entries: &[(&str, CapabilityEntry)]) -> AclMap {
         entries
             .iter()
-            .map(|(k, v)| (k.to_string(), v.parse().expect("valid permissions")))
+            .map(|(k, v)| (k.to_string(), v.clone()))
             .collect()
     }
 
     #[test]
-    fn wildcard_exec_allows_execute() {
-        let acl = m(&[("*", "x")]);
-        assert!(check_op(&acl, "did:ma:alice", PERM_X).is_ok());
+    fn wildcard_rpc_allows_rpc() {
+        let acl = m(&[("*", allow(&[CAP_RPC]))]);
+        assert!(check_cap(&acl, "did:ma:alice", CAP_RPC).is_ok());
     }
 
     #[test]
-    fn wildcard_exec_denies_write() {
-        let acl = m(&[("*", "x")]);
-        assert!(check_op(&acl, "did:ma:alice", PERM_W).is_err());
+    fn wildcard_rpc_denies_ipfs() {
+        let acl = m(&[("*", allow(&[CAP_RPC]))]);
+        assert!(check_cap(&acl, "did:ma:alice", CAP_IPFS).is_err());
     }
 
     #[test]
     fn explicit_deny_wins_over_wildcard_allow() {
-        let acl = m(&[("*", "rwx"), ("did:ma:bandit", "")]);
-        assert!(check_op(&acl, "did:ma:bandit", PERM_X).is_err());
+        let acl = m(&[
+            ("*", allow(&[CAP_RPC, CAP_IPFS])),
+            ("did:ma:bandit", CapabilityEntry::Deny),
+        ]);
+        assert!(check_cap(&acl, "did:ma:bandit", CAP_RPC).is_err());
     }
 
     #[test]
     fn exact_match_restricts_below_wildcard() {
-        let acl = m(&[("*", "rwx"), ("did:ma:bob", "r")]);
-        assert!(check_op(&acl, "did:ma:bob", PERM_R).is_ok());
-        assert!(check_op(&acl, "did:ma:bob", PERM_X).is_err());
+        let acl = m(&[
+            ("*", allow(&[CAP_RPC, CAP_IPFS])),
+            ("did:ma:bob", allow(&[CAP_RPC])),
+        ]);
+        assert!(check_cap(&acl, "did:ma:bob", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "did:ma:bob", CAP_IPFS).is_err());
     }
 
     #[test]
     fn did_url_caller_is_normalized() {
-        let acl = m(&[("did:ma:alice", "rwx")]);
-        assert!(check_op(&acl, "did:ma:alice#sign", PERM_X).is_ok());
+        let acl = m(&[("did:ma:alice", allow(&[CAP_RPC, CAP_IPFS]))]);
+        assert!(check_cap(&acl, "did:ma:alice#sign", CAP_RPC).is_ok());
     }
 
     #[test]
     fn no_entry_default_deny() {
-        assert!(check_op(&AclMap::new(), "did:ma:anyone", PERM_X).is_err());
+        assert!(check_cap(&AclMap::new(), "did:ma:anyone", CAP_RPC).is_err());
     }
 
     #[test]
     fn wildcard_deny_blocks_all() {
-        let acl = m(&[("*", "")]);
-        assert!(check_op(&acl, "did:ma:anyone", PERM_X).is_err());
+        let acl = m(&[("*", CapabilityEntry::Deny)]);
+        assert!(check_cap(&acl, "did:ma:anyone", CAP_RPC).is_err());
     }
 
     #[test]
     fn local_entity_key_allowed() {
-        let acl = m(&[("#agent", "rwx")]);
-        assert!(check_op(&acl, "#agent", PERM_X).is_ok());
-        assert!(check_op(&acl, "#other", PERM_X).is_err());
+        let acl = m(&[("#agent", allow(&[CAP_RPC]))]);
+        assert!(check_cap(&acl, "#agent", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "#other", CAP_RPC).is_err());
+    }
+
+    #[test]
+    fn arbitrary_capability_works() {
+        let acl = m(&[("did:ma:alice", allow(&["emote", "reply"]))]);
+        assert!(check_cap(&acl, "did:ma:alice", "emote").is_ok());
+        assert!(check_cap(&acl, "did:ma:alice", "reply").is_ok());
+        assert!(check_cap(&acl, "did:ma:alice", "admin").is_err());
+    }
+
+    #[test]
+    fn owner_capability_is_just_a_string() {
+        // "owner" semantics (implies all) are the caller's responsibility
+        let acl = m(&[("did:ma:alice", allow(&[CAP_OWNER]))]);
+        assert!(check_cap(&acl, "did:ma:alice", CAP_OWNER).is_ok());
+        assert!(check_cap(&acl, "did:ma:alice", CAP_RPC).is_err());
     }
 
     #[test]
@@ -349,38 +360,15 @@ mod tests {
         assert!(!is_valid_acl_key("group:handle."));
     }
 
-    #[test]
-    fn permissions_display() {
-        assert_eq!(Permissions::Allow(PERM_RWX).to_string(), "rwx");
-        assert_eq!(Permissions::Allow(PERM_R | PERM_X).to_string(), "rx");
-        assert_eq!(Permissions::Allow(PERM_X).to_string(), "x");
-        assert_eq!(Permissions::Deny.to_string(), "-");
-    }
-
-    #[test]
-    fn permissions_from_str() {
-        assert_eq!(
-            "rwx".parse::<Permissions>().unwrap(),
-            Permissions::Allow(PERM_RWX)
-        );
-        assert_eq!(
-            "rx".parse::<Permissions>().unwrap(),
-            Permissions::Allow(PERM_R | PERM_X)
-        );
-        assert_eq!(
-            "x".parse::<Permissions>().unwrap(),
-            Permissions::Allow(PERM_X)
-        );
-        assert_eq!("".parse::<Permissions>().unwrap(), Permissions::Deny);
-        assert!("z".parse::<Permissions>().is_err());
-    }
-
     #[cfg(feature = "acl")]
     #[test]
-    fn permissions_serde_roundtrip() {
+    fn capability_serde_roundtrip() {
         let acl: AclMap = [
-            ("*".to_string(), Permissions::Allow(PERM_RWX)),
-            ("did:ma:bandit".to_string(), Permissions::Deny),
+            (
+                "*".to_string(),
+                CapabilityEntry::from_caps(["rpc", "create"]),
+            ),
+            ("did:ma:bandit".to_string(), CapabilityEntry::Deny),
         ]
         .into_iter()
         .collect();
@@ -392,10 +380,12 @@ mod tests {
     #[cfg(feature = "acl")]
     #[test]
     fn yaml_null_deserializes_to_deny() {
-        // YAML tilde (~) is canonical null
-        let yaml = "'did:ma:x': ~\n'*': rwx\n";
+        let yaml = "'did:ma:x': ~\n'*':\n- rpc\n- create\n";
         let acl: AclMap = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(acl.get("did:ma:x"), Some(&Permissions::Deny));
-        assert_eq!(acl.get("*"), Some(&Permissions::Allow(PERM_RWX)));
+        assert_eq!(acl.get("did:ma:x"), Some(&CapabilityEntry::Deny));
+        assert_eq!(
+            acl.get("*"),
+            Some(&CapabilityEntry::from_caps(["rpc", "create"]))
+        );
     }
 }
