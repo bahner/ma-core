@@ -70,6 +70,8 @@ use crate::{Error, Result};
 
 // ── Capability constants ───────────────────────────────────────────────────────
 
+/// Deliver messages to an endpoint's inbox (`/ma/inbox/0.0.1`).
+pub const CAP_INBOX: &str = "inbox";
 /// Send RPC messages via `/ma/rpc/0.0.1`.
 pub const CAP_RPC: &str = "rpc";
 /// Publish DID documents via `/ma/ipfs/0.0.1`.

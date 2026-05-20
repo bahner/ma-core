@@ -124,7 +124,7 @@ pub use acl::normalize_principal;
 #[cfg(feature = "acl")]
 pub use acl::{
     check_cap, is_principal_key, is_valid_acl_key, validate_acl_map, AclMap, CapabilityEntry,
-    CAP_CREATE, CAP_DELETE, CAP_IPFS, CAP_READ, CAP_RPC, CAP_UPDATE,
+    CAP_CREATE, CAP_DELETE, CAP_INBOX, CAP_IPFS, CAP_READ, CAP_RPC, CAP_UPDATE,
 };
 
 // ─── Re-export service constants ────────────────────────────────────────────
