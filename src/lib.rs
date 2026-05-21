@@ -120,11 +120,10 @@ pub use multiformat::{
 };
 
 #[cfg(feature = "acl")]
-pub use acl::normalize_principal;
-#[cfg(feature = "acl")]
 pub use acl::{
-    check_cap, is_principal_key, is_valid_acl_key, validate_acl_map, AclMap, CapabilityEntry,
-    CAP_CREATE, CAP_DELETE, CAP_INBOX, CAP_IPFS, CAP_READ, CAP_RPC, CAP_UPDATE,
+    check_cap, is_principal_key, is_valid_acl_key, normalize_principal, validate_acl_map, AclMap,
+    CapabilityEntry, CAP_CREATE, CAP_DELETE, CAP_INBOX, CAP_IPFS, CAP_READ, CAP_RPC, CAP_UPDATE,
+    GROUP_PREFIX,
 };
 
 // ─── Re-export service constants ────────────────────────────────────────────
