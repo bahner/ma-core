@@ -7,7 +7,7 @@ both native and `wasm32-unknown-unknown`. No binary is produced here.
 
 ## Crate structure
 
-```
+```text
 src/
   lib.rs              — public API re-exports; feature-gated carefully
   acl/mod.rs          — AclMap, Permissions, check_op, normalize_principal
@@ -94,6 +94,7 @@ make lint     # clippy + mdl
 `make test` runs clippy with `--all-targets --all-features -- -W clippy::pedantic -D warnings`.
 
 Wasm profile check:
+
 ```sh
 cargo check --target wasm32-unknown-unknown --no-default-features --features "iroh,config"
 ```

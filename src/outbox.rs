@@ -1,7 +1,8 @@
 //! Transport-agnostic send handle to a remote ma service.
 //!
-//! An `Outbox` wraps the transport details and exposes only
-//! `send()` + `close()`.
+//! An `Outbox` wraps the transport details and exposes a single `send()`
+//! method. Outboxes are lightweight and meant to be kept alive for the
+//! duration of a session — `ma-core` manages the underlying connections.
 //!
 //! `send()` takes a [`Message`], validates it,
 //! serializes to CBOR, and transmits. Malformed or expired messages
@@ -10,9 +11,9 @@
 //! Requires the `iroh` feature.
 //!
 //! ```ignore
-//! let mut outbox = ep.outbox("did:ma:456", "ma/presence/0.0.1").await?;
+//! let mut outbox = ep.outbox(&resolver, "did:ma:k51qzi5uqu5d…", INBOX_PROTOCOL_ID).await?;
 //! outbox.send(&message).await?;
-//! outbox.close();
+//! // Keep the outbox alive — no need to close it.
 //! ```
 
 use crate::error::{Error, Result};

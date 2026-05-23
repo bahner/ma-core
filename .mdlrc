@@ -1,1 +1,1 @@
-rules "~MD013"
+style File.join(File.dirname(__FILE__), '.mdl_style.rb')

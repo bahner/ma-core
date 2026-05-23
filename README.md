@@ -1,313 +1,254 @@
 # ma-core
 
-A lean DIDComm service library for the 間 ecosystem.
+`ma-core` is the shared Rust library for the 間 (ma) ecosystem — a distributed
+actor system where each identity is a self-sovereign peer that can live in a
+browser tab, a server daemon, or anywhere Rust compiles to.
 
-`ma-core` provides everything a 間 endpoint needs: DID document publishing,
-service inboxes, outbox delivery, and transport abstraction — without coupling
-to any specific runtime or application.
+## What is 間
 
-## What it provides
+間 is an actor model over a peer-to-peer network. Every participant is a
+`did:ma:` identity — a stable, cryptographically-rooted address derived from an
+IPNS key. Actors communicate exclusively by passing signed, encrypted messages;
+there is no shared state and no central broker. Each actor has an inbox and
+can publish its own DID document to IPFS so others can look it up and dial in.
 
-### Messaging primitives
+The architecture is deliberately close to what Erlang/OTP does with processes,
+but instead of a single VM the actors live on an iroh QUIC overlay network that
+punches through NAT and works from a browser tab just as well as from a server.
+An actor running as a wasm page and one running as a Linux daemon can exchange
+messages directly, with the same code on both sides.
 
-- **`Inbox`** — bounded, TTL-aware FIFO receive queue for service endpoints.
-  Per-message TTL is computed from each message's `created_at + ttl`. Only
-  endpoint implementations push to an inbox; consumers read via
-  `pop`/`peek`/`drain`.
-- **Outbound delivery** — transport-agnostic fire-and-forget send path.
-  Messages are validated, serialized to CBOR, and transmitted.
+`ma-core` is the crate that makes all of that composable. It handles identity,
+messages, transport, and access control in one place so that `ma-agent`
+(the browser WASM frontend) and `ma-runtime` (the server daemon) can share a
+single implementation.
 
-### Service model
+## Getting a feel for it
 
-- **`Service` trait** — declares a protocol identifier and label.
-- **`MaEndpoint` trait** — shared interface for all transport endpoints:
-  register services, get inboxes, send messages.
+Create an identity and build a DID document in a few lines:
 
-The crate currently ships with an iroh-based transport backend internally,
-but iroh-specific types are considered backend details.
+```rust,ignore
+use ma_core::config::{SecretBundle, MaExtension};
 
-Every endpoint must provide `/ma/inbox/0.0.1`. Endpoints may optionally
-provide `/ma/ipfs/0.0.1` to publish DID documents on behalf of others.
+let bundle = SecretBundle::generate();
+println!("my DID: did:ma:{}", bundle.ipns_id()?);
 
-### DID document publishing
+let doc = bundle.build_document(&MaExtension::new().kind("agent"))?;
+let cbor = doc.encode()?; // ready for IPFS dag/put
+```
 
-- **`validate_ipfs_publish_request`** — decodes a signed CBOR message,
-  enforces `application/x-ma-ipfs-request` content type, validates the document,
-  verifies sender matches IPNS identity.
-- **`IpfsDidPublisher`** (non-WASM, `kubo` feature) — publishes validated
-  documents to IPFS via the native RPC backend.
-- **`publish_did_document_to_kubo`** / **`handle_ipfs_publish`** — lower-level
-  publish helpers.
+Start an iroh endpoint, register a service, and receive messages:
 
-### DID resolution
+```rust,ignore
+use ma_core::{new_ma_endpoint, service::{INBOX_PROTOCOL_ID, RPC_PROTOCOL_ID}};
 
-- **`DidDocumentResolver` trait** — async DID-to-Document resolution.
-- **`IpfsGatewayResolver`** — resolves via an IPFS/IPNS HTTP gateway.
+let mut endpoint = new_ma_endpoint(bundle.iroh_secret_key).await?;
 
-### Transport parsing
+let mut inbox  = endpoint.service(INBOX_PROTOCOL_ID);
+let mut rpc_in = endpoint.service(RPC_PROTOCOL_ID);
 
-Parses DID document service strings like `/iroh/<endpoint-id>/ma/inbox/0.0.1`:
+// The service strings for the DID document are ready as soon as you register.
+let services = endpoint.services(); // include in build_document's MaExtension
 
-- `endpoint_id_from_transport` / `protocol_from_transport`
-- `resolve_endpoint_for_protocol` / `resolve_inbox_endpoint_id`
-- `transport_string` — build service strings from parts.
+// Drain the inbox in a loop.
+while let Some(msg) = inbox.recv().await {
+    println!("from {}: {}", msg.from, String::from_utf8_lossy(msg.content()));
+}
+```
 
-### Identity bootstrap
+Send an encrypted message to another actor — all you need is their DID:
 
-- `generate_secret_key_file` / `load_secret_key_bytes` — secure 32-byte
-  key persistence with OS-level permission hardening.
+```rust,ignore
+use ma_core::{Message, Envelope, IpfsGatewayResolver, ipfs::gateway_resolver::DidDocumentResolver};
 
-### Native IPFS RPC (non-WASM, `kubo` feature)
+// Resolve the recipient's DID document to get their encryption key.
+let resolver = IpfsGatewayResolver::new("http://127.0.0.1:5001");
+let their_doc = resolver.resolve("did:ma:k51qzi5uqu5d…").await?;
 
-HTTP client for `/api/v0/` endpoints: add, cat, DAG put/get,
-IPNS publish/resolve, key management, pinning.
+// Sign with your key, encrypt for them.
+let msg = Message::new(&bundle.did()?, &their_doc.did, "text/plain",
+                       b"hello from the other side", &bundle.signing_key()?)?;
+let envelope = Envelope::encrypt(&msg, &their_doc)?;
+
+// Send via iroh outbox.
+let outbox = endpoint.outbox(&resolver, &their_doc.did, INBOX_PROTOCOL_ID).await?;
+outbox.send(&envelope).await?;
+```
+
+Check whether a sender is allowed to call a service before processing their
+message:
+
+```rust,ignore
+use ma_core::{check_cap, CAP_RPC};
+
+// One call, deny-wins semantics, works identically on wasm and native.
+check_cap(&acl, msg.from(), CAP_RPC)?;
+```
+
+## What the crate covers
+
+`ma-core` covers four concerns and deliberately stays out of everything else:
+
+- **Identity** — `SecretBundle` (four 32-byte keys), `Document`, `Proof`,
+  verification methods. `build_document` signs the whole thing in one call.
+- **Messaging** — `Message::new` signs and content-hashes. `Envelope` encrypts
+  for a recipient with X25519 + XChaCha20-Poly1305. `ReplayGuard` rejects
+  replayed envelopes using a sliding timestamp window.
+- **Transport** — `new_ma_endpoint` starts an iroh QUIC endpoint. Register
+  services by protocol ID string; each returns an `Inbox<Message>`. Outboxes
+  dial peers on demand via DID resolution. `IpfsGatewayResolver` resolves DIDs
+  on both wasm and native.
+- **Access control** — `AclMap` + `check_cap`. Capability strings, deny-wins
+  evaluation, wildcard principals, local fragment IDs, and group principals.
+  See [doc/acl.md](doc/acl.md).
+
+The crate compiles to both native and `wasm32-unknown-unknown`. The same
+identity, messaging, and transport code runs in a browser tab and on a server.
+Only Kubo RPC (the IPFS daemon HTTP API) is native-only, because it requires
+a network-capable HTTP client that is not available in wasm. Browser actors
+reach Kubo indirectly through `ma-runtime` over iroh. See
+[doc/ipfs-publish.md](doc/ipfs-publish.md) for that flow.
+
+## iroh as transport layer
+
+[iroh](https://iroh.computer) is a QUIC-based peer-to-peer connectivity
+library that gives every endpoint a stable public key identity and handles NAT
+traversal transparently. Two peers behind different NATs can dial each other
+directly without a relay in most network environments; a relay is used only as
+a last resort when direct connection genuinely cannot be established.
+
+From `ma-core`'s perspective, the nicest thing about iroh is that dialling
+a peer requires nothing but its endpoint ID — a 32-byte public key. There is
+no IP address to manage, no DNS, no port forwarding. An actor publishes its
+iroh endpoint ID in its DID document, and any other actor that can resolve
+that DID can dial in. `IpfsGatewayResolver` resolves the DID from IPFS and
+hands back the endpoint ID; `Outbox` dials the connection. The whole sequence
+is two calls:
+
+```rust,ignore
+let outbox = endpoint.outbox(&resolver, &their_did, INBOX_PROTOCOL_ID).await?;
+outbox.send(&envelope).await?;
+```
+
+iroh also powers the gossip broadcast layer when the `gossip` feature is
+enabled. A topic is a 32-byte hash; any endpoint subscribed to the same topic
+receives broadcasts from the others. This is how 間 actors can do fan-out
+messaging without a message broker.
+
+## IPFS, IPNS, and IPLD as the data layer
+
+間 uses the [IPFS](https://ipfs.tech) stack not just for file storage but as
+the data model for everything. Understanding the three layers helps make sense
+of how `ma-core` fits together.
+
+**[IPFS](https://ipfs.tech)** provides content-addressed block storage. A
+block is a sequence of bytes; its address (CID) is a hash of its content.
+Content never changes at a
+given CID — to update something you write a new block and get a new CID. This
+immutability is what makes 間's data verifiable: if you have a CID you can
+always confirm the data you received matches it.
+
+**[IPNS](https://docs.ipfs.tech/concepts/ipns/)** provides the mutable layer
+on top. An IPNS record maps a public key to a CID; the owner can update the record by signing a new mapping with their
+private key. A `did:ma:` identity is literally an IPNS key: `did:ma:<k51…>`
+where `k51…` is the IPNS key ID encoded in base36. Resolving the DID fetches
+the current IPNS record, follows the CID it points to, and retrieves the DID
+document from IPFS.
+
+**[IPLD](https://ipld.io)** (InterPlanetary Linked Data) is the data model
+that gives structure to IPFS blocks. A DAG-CBOR node is an IPLD node: a map whose values can
+themselves be CIDs, forming a directed acyclic graph of linked data. `ma-core`
+encodes all DID documents as DAG-CBOR. Each DID document is an IPLD node, and
+the fields that reference other documents or objects are CID links. The whole
+identity graph is therefore a traversable IPLD DAG rooted in IPNS.
+
+`ma-runtime` takes this further and uses IPLD to store its entire runtime
+state. Entity definitions, service registrations, the configuration manifest —
+everything the runtime knows about itself lives as IPLD nodes in IPFS, linked
+together into a merkle DAG. When an entity is updated, a new DAG-CBOR block is
+written and a new CID minted; that CID propagates up the tree, eventually
+producing a new root CID that the runtime publishes to IPNS via its DID
+document. The runtime never writes a local database or state file — the IPFS
+DAG is the state, and the IPNS pointer is the index. Cold-start recovery means
+nothing more than resolving your own DID and following the links.
+
+This is what 間 means by genuinely decentralised services. There is no central
+server, no shared database, no cloud storage account. Each actor owns its own
+data in its own IPLD tree, addressed by content hash, reachable from its DID.
+Actors exchange messages over iroh. State changes are IPFS writes. The whole
+system composes without any of the parties needing to trust a common
+infrastructure provider — or to coordinate on anything other than the DID
+document format and the message wire protocol.
 
 ## Feature flags
 
-These are Cargo compile-time feature flags.
-
-| Feature  | Default | Description |
-|----------|---------|-------------|
-| `kubo`   | no      | Native IPFS RPC backend for publishing |
-| `iroh`   | yes     | Internal iroh QUIC transport backend |
-| `gossip` | yes     | Internal iroh gossip support |
-| `acl`    | no      | Operation-level access control (`AclMap`, `check_op`, permission bits) |
-| `config` | no      | Config model + YAML serialization + encrypted secret bundles (CLI/fs/logging remain native-only) |
-
-### `config` feature
-
-The `config` feature supports both native and `wasm32` targets, but with
-different capability levels.
-
-It provides on all targets:
-
-- **`Config`** — serializable config model (`from_yaml_str`, `to_yaml_string`).
-- **`SecretBundle`** — generate keys and encrypt/decrypt bundle bytes.
-- **`BrowserIdentityExport`** — JSON payload with inlined encrypted bundle
-  (`encrypted_secret_bundle_base64`) for browser import/export.
-
-Native-only additions:
-
-- **`MaArgs`** — a `#[derive(Args)]` struct you flatten into your own `Parser`.
-- **`Config::from_args`** — merge CLI/env/YAML/defaults for daemons.
-- **`Config::save` / `Config::gen_headless`** — filesystem persistence helpers.
-- **`SecretBundle::save` / `SecretBundle::load`** — encrypted file I/O.
-- **`Config::init_logging()`** — sets up `tracing-subscriber` with separate
-  log levels for file and stdout.
-
-Wasm logging behavior:
-
-- `Config::init_logging()` is also available on wasm and routes logs to browser
-  console.
-- Console output is filtered by `log_level_stdout`.
-
-Minimal usage:
-
-```rust,ignore
-use clap::Parser;
-use ma_core::config::{Config, MaArgs};
-
-const MA_DEFAULT_SLUG: &str = "myd";
-
-#[derive(Parser)]
-struct Cli {
-    #[command(flatten)]
-    ma: MaArgs,
-}
-
-fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    let config = Config::from_args(&cli.ma, MA_DEFAULT_SLUG)?;
-    config.init_logging()?;
-  let _resolver = config.ipfs_gateway_resolver();
-    Ok(())
-}
-```
-
-Config file (`$XDG_CONFIG_HOME/ma/<slug>.yaml`) example:
-
-```yaml
-log_level: debug
-kubo_rpc_url: http://127.0.0.1:5001
-did_resolver_positive_ttl_secs: 60
-did_resolver_negative_ttl_secs: 10
-```
+| Feature   | Default | What it enables |
+|-----------|---------|-----------------|
+| `iroh`    | yes     | iroh QUIC transport backend, `new_ma_endpoint`, `Outbox` |
+| `gossip`  | yes     | iroh-gossip broadcast (requires `iroh`) |
+| `kubo`    | no      | Native Kubo RPC — publish, pin, DAG put/get, key management (non-wasm only) |
+| `acl`     | no      | `AclMap`, `check_cap`, capability constants, group principals |
+| `config`  | no      | `Config`, `SecretBundle`, `BrowserIdentityExport`; plus native-only `MaArgs`, `Config::from_args`, filesystem helpers |
 
 ## Platform support
 
-Core types (`Inbox`, `Service`, transport parsing, validation)
-compile on all targets including `wasm32-unknown-unknown`.
+| Capability | wasm32 | native |
+|------------|--------|--------|
+| `Inbox`, `Message`, transport parsing | yes | yes |
+| iroh QUIC transport (`iroh` feature) | yes | yes |
+| `IpfsGatewayResolver` (DID fetch) | yes | yes |
+| `SecretBundle` crypto, `Config` serialization | yes | yes |
+| Kubo RPC — publish, pin, DAG write | no | yes (`kubo` feature) |
+| `Config::from_args`, filesystem, CLI | no | yes |
 
-- This library is intended for both wasm and native targets.
-- `IpfsGatewayResolver` is available on both wasm and native for gateway-based DID fetch.
-- Only Kubo write/pin operations are native-only.
-- On wasm builds, the native `kubo` module is not compiled in.
-- `config` model serialization and `SecretBundle` crypto are available on wasm.
-- `config` filesystem and CLI/env facilities are native-only.
-- `iroh` transport compiles on wasm and native.
-- `gossip` is optional and can be enabled when needed.
+See [doc/wasm.md](doc/wasm.md) for the full wasm story, including the
+`getrandom/js` requirement and the IndexedDB storage pattern.
 
-Important: ma-core does provide gateway-based DID fetch on wasm via
-`IpfsGatewayResolver`. Native-only IPFS RPC operations (publish/pin/write)
-remain unavailable on wasm.
+## Quick orientation
 
-For wasm storage, persist encrypted `SecretBundle` bytes and serialized `Config`
-text in browser storage, and provide the passphrase from user input at runtime
-instead of storing it.
-
-Compile-time split note:
-
-- On wasm, `Config` does not include Kubo-specific fields.
-- On native, `Config` includes daemon/Kubo fields and filesystem helpers.
-
-## Quick usage
-
-Consumers receive validated `Message` objects from an `Inbox` — the endpoint
-handles deserialization and validation before messages enter the queue:
-
-```rust,ignore
-// Endpoint gives you an Inbox<Message> when you register a service
-let mut inbox = endpoint.service("/ma/inbox/0.0.1");
-
-let now = current_time_secs();
-while let Some(msg) = inbox.pop(now) {
-    println!("from={} type={}", msg.from, msg.message_type);
-}
-```
-
-Example: full publish flow against native IPFS RPC (native only):
-
-```rust
-#[cfg(not(target_arch = "wasm32"))]
-async fn publish(message_cbor: &[u8]) -> anyhow::Result<()> {
-  let publisher = ma_core::IpfsDidPublisher::new("http://127.0.0.1:5001/api/v0")?;
-  let response = publisher.publish_signed_message(message_cbor).await?;
-    println!("ok={} did={:?} cid={:?}", response.ok, response.did, response.cid);
-    Ok(())
-}
-```
-
-## End-to-end operational flow
-
-This section shows a concrete native-only flow for publishing a DID document through native IPFS RPC.
-
-### 1. Preconditions
-
-- Native IPFS RPC API is reachable at whichever base URL your environment uses.
-- Create a publisher once with that URL and reuse the same instance.
-- You have a signed CBOR `Message` payload where
-  `content_type` is `application/x-ma-ipfs-request`,
-  `from` is a DID whose IPNS id matches the DID document id,
-  and `content` is CBOR encoded `IpfsPublishDidRequest`.
-- The DID document is valid and signature-verifiable.
-
-The DID document itself is always DAG-CBOR. Use `Document::encode()` and
-`Document::decode()` for serialization.
-
-### 2. Validate and publish
-
-Use `IpfsDidPublisher` when you want a persisted endpoint configuration:
-
-```rust
-#[cfg(not(target_arch = "wasm32"))]
-pub async fn publish_from_wire(
-  kubo_url: &str,
-  message_cbor: &[u8],
-) -> anyhow::Result<ma_core::IpfsPublishDidResponse> {
-  let publisher = ma_core::IpfsDidPublisher::new(kubo_url)?;
-  publisher.publish_signed_message(message_cbor).await
-}
-```
-
-What it does internally:
-
-1. `validate_ipfs_publish_request` verifies message and document integrity.
-1. Publisher imports the IPNS key under an ephemeral name, publishes, and
-   removes the key immediately after.
-1. Returns `IpfsPublishDidResponse` with `did` and `cid`.
-
-### 3. Verify published target
-
-After publish, resolve the IPNS name and compare to expected CID path:
-
-```rust
-#[cfg(not(target_arch = "wasm32"))]
-pub async fn verify_publish(
-  publisher: &ma_core::IpfsDidPublisher,
-  ipns_id: &str,
-  expected_cid: &str,
-) -> anyhow::Result<()> {
-  let resolved = ma_core::name_resolve(publisher.kubo_url(), &format!("/ipns/{ipns_id}"), true).await?;
-  let expected = format!("/ipfs/{expected_cid}");
-  anyhow::ensure!(resolved == expected, "resolved target mismatch: {resolved} != {expected}");
-  Ok(())
-}
-```
-
-### 4. Production readiness pattern
-
-Recommended startup/publish order:
-
-1. create `IpfsDidPublisher::new(kubo_url)` once
-1. call `publisher.wait_until_ready(attempts)`
-1. decode transport bytes
-1. call `publisher.publish_signed_message(...)`
-1. emit structured log with `did`, `cid`
-1. optionally run a post-publish `name_resolve` check
-
-Minimal orchestration example:
-
-```rust
-#[cfg(not(target_arch = "wasm32"))]
-pub async fn publish_with_readiness(
-  kubo_url: &str,
-  message_cbor: &[u8],
-) -> anyhow::Result<ma_core::IpfsPublishDidResponse> {
-  let publisher = ma_core::IpfsDidPublisher::new(kubo_url)?;
-  publisher.wait_until_ready(5).await?;
-  let response = publisher.publish_signed_message(message_cbor).await?;
-  Ok(response)
-}
-```
-
-### 5. Failure semantics you should rely on
-
-- Invalid CBOR, content type, DID document, or signatures fail fast.
-- Sender/document IPNS mismatch fails fast.
-- Missing/import-mismatched key material fails fast.
-- IPNS publish uses retry and may still be accepted if resolve confirms target.
-- Unpin failures in pin rotation are returned as metadata (`PinUpdateOutcome`) and do not hide successful new pin operations.
+- **Identity** — `SecretBundle` holds four 32-byte keys (iroh, IPNS, Ed25519
+  signing, X25519 encryption). `SecretBundle::build_document` produces a
+  complete signed `Document` ready to publish. See [doc/config.md](doc/config.md).
+- **Messaging** — `Message::new` signs and content-hashes a payload.
+  `Envelope` encrypts it for a recipient. `ReplayGuard` blocks duplicates.
+  `Inbox` and `Outbox` hide all transport details behind simple send/receive
+  interfaces — see [doc/messaging.md](doc/messaging.md).
+- **Transport** — `new_ma_endpoint(secret_bytes)` starts an iroh endpoint.
+  Register services by protocol ID; each gives you an `Inbox<Message>` to
+  drain. Transport service strings are parsed by helpers in `transport.rs`.
+- **IPFS publishing** — wasm endpoints cannot reach Kubo directly. They build
+  a signed `application/x-ma-ipfs-request` message and send it to a
+  `ma-runtime` instance over iroh, which validates and publishes on their
+  behalf. See [doc/ipfs-publish.md](doc/ipfs-publish.md).
+- **ACL** — `check_cap(&acl, sender_did, cap)` with deny-wins semantics.
+  See [doc/acl.md](doc/acl.md).
 
 ## Build and test
 
 ```bash
-cargo build
+cargo build          # default features (iroh + gossip)
+
 cargo test
+
+make test            # fmt-check + clippy (pedantic, -D warnings) + tests + doc
 ```
 
-Wasm, slim iroh-only profile:
+Wasm profile (used by ma-agent):
 
 ```bash
-cargo check --target wasm32-unknown-unknown --no-default-features --features iroh
+cargo check --target wasm32-unknown-unknown --no-default-features --features "iroh,config"
 ```
 
-Note: target-specific wasm dependencies in `Cargo.toml` enable required web RNG support (`getrandom/js`) automatically for `wasm32-unknown-unknown`.
-
-Wasm, iroh + gossip profile (when you need broadcast):
+Full features:
 
 ```bash
-cargo check --target wasm32-unknown-unknown --no-default-features --features "iroh gossip"
+cargo check --all-features
 ```
 
-Run clippy when needed:
+## Further reading
 
-```bash
-cargo clippy --all-targets --all-features -- -D warnings
-```
-
-## Design principles
-
-- Strict input validation; never mutate malformed data.
-- Small and clear building blocks, without unnecessary complexity.
-- Shared types and contracts in the library; avoid duplication in consumers.
-- Fail hard when identity, signature, or key mapping does not match.
+- [doc/messaging.md](doc/messaging.md) — `Inbox`, `Outbox`, actor model in practice
+- [doc/wasm.md](doc/wasm.md) — wasm targets, feature combinations, storage pattern
+- [doc/ipfs-publish.md](doc/ipfs-publish.md) — the full wasm→iroh→Kubo publish flow
+- [doc/acl.md](doc/acl.md) — `AclMap` format, deny-wins, group principals
+- [doc/config.md](doc/config.md) — `Config`, `SecretBundle`, native CLI helpers
