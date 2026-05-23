@@ -54,6 +54,15 @@ enum CacheValue {
     Miss(String),
 }
 
+impl Default for IpfsGatewayResolver {
+    /// Build a resolver using only the built-in gateways (localhost:8080 +
+    /// two public fallbacks). Use [`IpfsGatewayResolver::new`] to add an
+    /// additional primary gateway (e.g. a Kubo node on a non-default port).
+    fn default() -> Self {
+        Self::new(Self::LOCALHOST_GATEWAY)
+    }
+}
+
 impl IpfsGatewayResolver {
     const LOCALHOST_GATEWAY: &'static str = "http://127.0.0.1:8080/";
     const DEFAULT_PUBLIC_GATEWAYS: [&'static str; 2] = ["https://dweb.link/", "https://w3s.link/"];

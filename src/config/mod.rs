@@ -671,10 +671,12 @@ impl Config {
     }
 
     /// Build a gateway-backed DID resolver using config TTL settings.
-    #[cfg(not(target_arch = "wasm32"))]
+    ///
+    /// Uses the built-in gateway list (localhost:8080 + public fallbacks).
+    /// Works on both native and WASM targets.
     #[must_use]
     pub fn ipfs_gateway_resolver(&self) -> crate::ipfs::IpfsGatewayResolver {
-        crate::ipfs::IpfsGatewayResolver::new(self.kubo_rpc_url.clone()).with_cache_ttls(
+        crate::ipfs::IpfsGatewayResolver::default().with_cache_ttls(
             web_time::Duration::from_secs(self.did_resolver_positive_ttl_secs),
             web_time::Duration::from_secs(self.did_resolver_negative_ttl_secs),
         )

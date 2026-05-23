@@ -87,7 +87,9 @@ back an outbox:
 use ma_core::{IpfsGatewayResolver, service::INBOX_PROTOCOL_ID};
 use ma_core::ipfs::gateway_resolver::DidDocumentResolver;
 
-let resolver = IpfsGatewayResolver::new("http://127.0.0.1:5001");
+// Use default (localhost:8080 + public gateways), or config.ipfs_gateway_resolver()
+// when a Config is available.
+let resolver = IpfsGatewayResolver::default();
 let mut outbox = endpoint.outbox(&resolver, "did:ma:k51qzi5uqu5d…", INBOX_PROTOCOL_ID).await?;
 ```
 
