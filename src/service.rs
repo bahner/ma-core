@@ -62,3 +62,5 @@ pub const MESSAGE_TYPE_CRUD_DELETE_REPLY: &str = "application/x-ma-crud-delete-r
 // ─── Content types (inner payload format) ───────────────────────────────────
 
 pub const CONTENT_TYPE_CBOR: &str = "application/cbor";
+/// CBOR-encoded reply tuple `[:ok | :error, data]` — used for RPC and CRUD replies.
+pub const CONTENT_TYPE_TUPLE: &str = "application/x-ma-tuple";

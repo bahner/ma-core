@@ -39,8 +39,9 @@ pub fn decode_content(content: &[u8]) -> crate::error::MaResult<(u64, Vec<u8>)> 
 /// `Message::new` applies this automatically — callers never handle raw prefixes.
 fn codec_for(content_type: &str) -> u64 {
     match content_type {
-        "application/cbor" => crate::multiformat::CODEC_CBOR,
         "application/vnd.ipld.dag-cbor" => crate::multiformat::CODEC_DAG_CBOR,
+        // application/x-ma-tuple is a CBOR-encoded reply tuple [:ok | :error, data].
+        "application/cbor" | "application/x-ma-tuple" => crate::multiformat::CODEC_CBOR,
         _ => crate::multiformat::CODEC_IDENTITY,
     }
 }
