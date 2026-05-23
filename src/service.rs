@@ -31,6 +31,7 @@ pub trait Service: Send + Sync {
 pub const INBOX_PROTOCOL_ID: &str = "/ma/inbox/0.0.1";
 pub const RPC_PROTOCOL_ID: &str = "/ma/rpc/0.0.1";
 pub const IPFS_PROTOCOL_ID: &str = "/ma/ipfs/0.0.1";
+pub const CRUD_PROTOCOL_ID: &str = "/ma/crud/0.0.1";
 
 /// The well-known broadcast topic / protocol string.
 pub const BROADCAST_TOPIC: &str = "/ma/broadcast/0.0.1";
@@ -46,6 +47,17 @@ pub const MESSAGE_TYPE_IPFS_STORE: &str = "application/x-ma-ipfs-store";
 pub const MESSAGE_TYPE_DOC: &str = "application/x-ma-doc";
 pub const MESSAGE_TYPE_RPC: &str = "application/x-ma-rpc";
 pub const MESSAGE_TYPE_RPC_REPLY: &str = "application/x-ma-rpc-reply";
+
+// ─── CRUD message types (/ma/crud/0.0.1) ────────────────────────────────────
+
+pub const MESSAGE_TYPE_CRUD_GET: &str = "application/x-ma-crud-get";
+pub const MESSAGE_TYPE_CRUD_GET_REPLY: &str = "application/x-ma-crud-get-reply";
+pub const MESSAGE_TYPE_CRUD_EDIT: &str = "application/x-ma-crud-edit";
+pub const MESSAGE_TYPE_CRUD_EDIT_REPLY: &str = "application/x-ma-crud-edit-reply";
+pub const MESSAGE_TYPE_CRUD_SET: &str = "application/x-ma-crud-set";
+pub const MESSAGE_TYPE_CRUD_SET_REPLY: &str = "application/x-ma-crud-set-reply";
+pub const MESSAGE_TYPE_CRUD_DELETE: &str = "application/x-ma-crud-delete";
+pub const MESSAGE_TYPE_CRUD_DELETE_REPLY: &str = "application/x-ma-crud-delete-reply";
 
 // ─── Content types (inner payload format) ───────────────────────────────────
 

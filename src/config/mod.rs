@@ -395,7 +395,9 @@ impl Config {
             m.insert(serde_yaml::Value::String(k.to_string()), v);
         };
 
-        set("slug", serde_yaml::Value::String(self.slug.clone()));
+        // NOTE: `slug` is intentionally omitted — it selects which config file
+        // to open, so storing it inside that file is a catch-22.
+        // It is read only from CLI (--slug) or env (MA_SLUG), never from YAML.
         set(
             "log_level",
             serde_yaml::Value::String(self.log_level.clone()),

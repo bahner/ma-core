@@ -70,6 +70,8 @@ pub const CAP_INBOX: &str = "inbox";
 pub const CAP_RPC: &str = "rpc";
 /// Publish DID documents via `/ma/ipfs/0.0.1`.
 pub const CAP_IPFS: &str = "ipfs";
+/// Access the structured CRUD service via `/ma/crud/0.0.1`.
+pub const CAP_CRUD: &str = "crud";
 /// Read entities, config, and namespace contents.
 pub const CAP_READ: &str = "read";
 /// Create new namespaces or entities.
