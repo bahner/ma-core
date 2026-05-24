@@ -40,6 +40,9 @@ pub struct IpfsGatewayResolver {
     localhost_cooldown: Duration,
     cache: Mutex<HashMap<String, CacheEntry>>,
     localhost_blocked_until: Mutex<Option<Instant>>,
+    /// Per-request timeout for WASM fetches.  `None` → use the built-in
+    /// 10-second fallback.  Ignored on native (client-level 4 s applies).
+    wasm_request_timeout: Mutex<Option<Duration>>,
 }
 
 #[derive(Clone)]
@@ -96,6 +99,7 @@ impl IpfsGatewayResolver {
             localhost_cooldown: Duration::from_secs(20),
             cache: Mutex::new(HashMap::new()),
             localhost_blocked_until: Mutex::new(None),
+            wasm_request_timeout: Mutex::new(None),
         }
     }
 
@@ -130,6 +134,25 @@ impl IpfsGatewayResolver {
     pub fn with_localhost_cooldown(mut self, cooldown: Duration) -> Self {
         self.localhost_cooldown = cooldown;
         self
+    }
+
+    /// Override the per-request timeout used for WASM fetches.
+    /// The default when not set is 10 seconds.
+    /// Has no effect on native (the client-level 4 s timeout applies there).
+    #[must_use]
+    pub fn with_request_timeout(self, timeout: Duration) -> Self {
+        if let Ok(mut t) = self.wasm_request_timeout.lock() {
+            *t = Some(timeout);
+        }
+        self
+    }
+
+    /// Update the WASM per-request timeout at runtime.
+    /// Pass `None` to revert to the 10-second built-in default.
+    pub fn set_request_timeout(&self, timeout: Option<Duration>) {
+        if let Ok(mut t) = self.wasm_request_timeout.lock() {
+            *t = timeout;
+        }
     }
 }
 
@@ -170,7 +193,18 @@ impl DidDocumentResolver for IpfsGatewayResolver {
 
             let url = format!("{}ipns/{}", gateway, parsed.ipns);
 
-            let response = match self.client.get(&url).send().await {
+            let req = self.client.get(&url);
+            #[cfg(target_arch = "wasm32")]
+            let req = {
+                let timeout = self
+                    .wasm_request_timeout
+                    .lock()
+                    .ok()
+                    .and_then(|guard| *guard)
+                    .unwrap_or_else(|| Duration::from_secs(10));
+                req.timeout(timeout)
+            };
+            let response = match req.send().await {
                 Ok(response) => response,
                 Err(err) => {
                     if is_localhost_gateway(gateway) {

@@ -80,6 +80,12 @@ pub const CAP_CREATE: &str = "create";
 pub const CAP_UPDATE: &str = "update";
 /// Delete namespaces or entities.
 pub const CAP_DELETE: &str = "delete";
+/// Read or modify ACL documents.
+///
+/// Separates ACL-administration rights from general CRUD access.
+/// A principal with `acl` capability can read and update ACL documents
+/// without necessarily having access to the resources those ACLs protect.
+pub const CAP_ACL: &str = "acl";
 
 // ── Group-principal prefix ─────────────────────────────────────────────────────
 

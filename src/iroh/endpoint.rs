@@ -18,7 +18,7 @@ use crate::outbox::{Outbox, OutboxWire};
 use crate::transport::transport_string;
 use crate::{Document, Message};
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 
 const DEFAULT_MAX_INBOUND_MESSAGE_SIZE: usize = 1024 * 1024;
@@ -35,13 +35,13 @@ pub struct IrohEndpoint {
     /// `APPLICATION_CLOSE` when a `Channel` is dropped after sending,
     /// which would otherwise race with the receiver's `accept_bi()` loop.
     connection_cache: Mutex<HashMap<(String, String), Connection>>,
-    /// Serialises concurrent fresh-connection attempts to the same peer.
+    /// Per-`(endpoint_id, protocol)` mutex that serialises concurrent fresh-connection
+    /// attempts to the *same* peer+protocol pair.
     ///
-    /// Multiple tasks that simultaneously find the cache empty would otherwise
-    /// all try to `connect()` in parallel.  The second task to acquire this
-    /// lock re-checks the cache and reuses the connection the first task just
-    /// established, so only one real QUIC connection is ever opened per peer.
-    connect_lock: AsyncMutex<()>,
+    /// Using one lock per key (rather than a single global lock) means a hung or slow
+    /// connection attempt to one peer can never block connections to a different peer.
+    connect_locks: Mutex<HashMap<(String, String), Arc<AsyncMutex<()>>>>,
+
 }
 
 impl IrohEndpoint {
@@ -66,7 +66,8 @@ impl IrohEndpoint {
             inboxes: BTreeMap::new(),
             router: None,
             connection_cache: Mutex::new(HashMap::new()),
-            connect_lock: AsyncMutex::new(()),
+            connect_locks: Mutex::new(HashMap::new()),
+
         })
     }
 
@@ -135,27 +136,41 @@ impl IrohEndpoint {
             .cloned();
 
         if let Some(conn) = cached {
-            match conn.open_bi().await {
-                Ok((send, _recv)) => {
-                    debug!(endpoint_id, protocol, "reusing cached connection");
-                    return Ok(Channel::new(conn, send));
-                }
-                Err(err) => {
-                    debug!(
-                        endpoint_id,
-                        protocol,
-                        error = %err,
-                        "cached connection stale, reconnecting"
-                    );
-                    self.connection_cache.lock().unwrap().remove(&cache_key);
+            if conn.close_reason().is_some() {
+                debug!(endpoint_id, protocol, "cached connection already closed, evicting");
+                self.connection_cache.lock().unwrap().remove(&cache_key);
+            } else {
+                match conn.open_bi().await {
+                    Ok((send, _recv)) => {
+                        debug!(endpoint_id, protocol, "reusing cached connection");
+                        return Ok(Channel::new(conn, send));
+                    }
+                    Err(err) => {
+                        debug!(
+                            endpoint_id,
+                            protocol,
+                            error = %err,
+                            "cached connection stale, reconnecting"
+                        );
+                        self.connection_cache.lock().unwrap().remove(&cache_key);
+                    }
                 }
             }
         }
 
-        // Slow path: serialise all concurrent fresh-connection attempts.
-        // Tasks that were blocked here will re-check the cache below and
-        // reuse the connection established by whoever went first.
-        let _connect_guard = self.connect_lock.lock().await;
+        // Slow path: serialise concurrent fresh-connection attempts *per key*.
+        // Tasks blocked here will re-check the cache below and reuse the
+        // connection established by whoever went first.
+        // Using a per-key lock means a hung connect() to one peer can never
+        // block connections to a different peer or a different protocol.
+        let peer_lock = {
+            let mut locks = self.connect_locks.lock().unwrap();
+            locks
+                .entry(cache_key.clone())
+                .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+                .clone()
+        };
+        let _connect_guard = peer_lock.lock().await;
 
         // Re-check after acquiring the lock — another task may have just
         // connected and cached the result while we were waiting.
@@ -167,22 +182,27 @@ impl IrohEndpoint {
             .cloned();
 
         if let Some(conn) = cached {
-            match conn.open_bi().await {
-                Ok((send, _recv)) => {
-                    debug!(
-                        endpoint_id,
-                        protocol, "reusing cached connection (post-lock)"
-                    );
-                    return Ok(Channel::new(conn, send));
-                }
-                Err(err) => {
-                    debug!(
-                        endpoint_id,
-                        protocol,
-                        error = %err,
-                        "cached connection stale after lock, reconnecting"
-                    );
-                    self.connection_cache.lock().unwrap().remove(&cache_key);
+            if conn.close_reason().is_some() {
+                debug!(endpoint_id, protocol, "cached connection already closed (post-lock), evicting");
+                self.connection_cache.lock().unwrap().remove(&cache_key);
+            } else {
+                match conn.open_bi().await {
+                    Ok((send, _recv)) => {
+                        debug!(
+                            endpoint_id,
+                            protocol, "reusing cached connection (post-lock)"
+                        );
+                        return Ok(Channel::new(conn, send));
+                    }
+                    Err(err) => {
+                        debug!(
+                            endpoint_id,
+                            protocol,
+                            error = %err,
+                            "cached connection stale after lock, reconnecting"
+                        );
+                        self.connection_cache.lock().unwrap().remove(&cache_key);
+                    }
                 }
             }
         }
@@ -220,11 +240,17 @@ impl IrohEndpoint {
             conn.close(0u32.into(), b"done");
         }
 
+        // Close the underlying endpoint first. This sends CONNECTION_CLOSE to
+        // all peers — including inbound connections managed by the router —
+        // causing every accept_bi() to return an error and break out of the
+        // accept loop. Without this, router.shutdown() waits forever for
+        // accept() tasks that are blocked on accept_bi() waiting for the next
+        // inbound stream from a peer that may never open one.
+        self.endpoint.close().await;
+
         if let Some(router) = self.router.take() {
             let _ = router.shutdown().await;
-            return;
         }
-        self.endpoint.close().await;
     }
 
     /// Start the inbound router for all registered services.
@@ -375,7 +401,6 @@ impl MaEndpoint for IrohEndpoint {
         let addr = self.resolve_addr(target)?;
         let mut channel = self.open_addr_cached(target, addr, protocol).await?;
         channel.send(&cbor).await?;
-        channel.close();
         Ok(())
     }
 

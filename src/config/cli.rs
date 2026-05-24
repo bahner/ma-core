@@ -31,11 +31,8 @@ use clap::Args;
 ///
 /// Add these to your binary with `#[command(flatten)]`.
 ///
-/// `MA_CONFIG` and `MA_SLUG` are the only statically-named environment
-/// variables; all other fields are resolved dynamically in
-/// [`super::Config::from_args`] using the binary's compile-time `MA_DEFAULT_SLUG`
-/// constant as a prefix (e.g. `MA_PANTEIA_LOG_LEVEL`), with a plain
-/// `MA_LOG_LEVEL`-style fallback.
+/// All fields are resolved from `MA_*` environment variables, a YAML config
+/// file, and built-in defaults — in that priority order.
 #[derive(Args, Debug, Clone, Default)]
 pub struct MaArgs {
     /// Path to the YAML config file. Overrides the slug-derived default
@@ -48,55 +45,46 @@ pub struct MaArgs {
     /// Runtime slug. Overrides `MA_DEFAULT_SLUG` for file naming
     /// (`<slug>.yaml`, `<slug>.bin`, `<slug>.log`) only.
     ///
-    /// The env-var prefix `MA_<MA_DEFAULT_SLUG>_*` is always determined by
-    /// the compile-time constant — this value does **not** change the prefix.
-    ///
     /// Environment variable: `MA_SLUG`
     #[arg(long, env = "MA_SLUG")]
     pub slug: Option<String>,
 
     /// Log level for the log file (`trace`, `debug`, `info`, `warn`, `error`).
     ///
-    /// Resolved via `MA_<MA_DEFAULT_SLUG>_LOG_LEVEL` → `MA_LOG_LEVEL` → YAML
-    /// → default `"info"`.
+    /// Environment variable: `MA_LOG_LEVEL`. Falls back to YAML → default `"info"`.
     #[arg(long)]
     pub log_level: Option<String>,
 
     /// Path to the log file. Defaults to `XDG_DATA_HOME/ma/<slug>.log`.
     ///
-    /// Resolved via `MA_<MA_DEFAULT_SLUG>_LOG_FILE` → `MA_LOG_FILE` → YAML
-    /// → XDG default.
+    /// Environment variable: `MA_LOG_FILE`. Falls back to YAML → XDG default.
     #[arg(long)]
     pub log_file: Option<PathBuf>,
 
     /// Log level for stdout output (`trace`, `debug`, `info`, `warn`, `error`).
     ///
-    /// Resolved via `MA_<MA_DEFAULT_SLUG>_LOG_LEVEL_STDOUT` →
-    /// `MA_LOG_LEVEL_STDOUT` → YAML → default `"warn"`.
+    /// Environment variable: `MA_LOG_LEVEL_STDOUT`. Falls back to YAML → default `"warn"`.
     #[arg(long)]
     pub log_level_stdout: Option<String>,
 
     /// Positive DID cache TTL in seconds.
     ///
     /// Set to `0` to disable caching successful DID resolutions.
-    /// Resolved via `MA_<MA_DEFAULT_SLUG>_DID_RESOLVER_POSITIVE_TTL_SECS` →
-    /// `MA_DID_RESOLVER_POSITIVE_TTL_SECS` → YAML → default `60`.
+    /// Environment variable: `MA_DID_RESOLVER_POSITIVE_TTL_SECS`. Falls back to YAML → default `60`.
     #[arg(long)]
     pub did_resolver_positive_ttl_secs: Option<u64>,
 
     /// Negative DID cache TTL in seconds.
     ///
     /// Set to `0` to disable caching failed DID resolutions.
-    /// Resolved via `MA_<MA_DEFAULT_SLUG>_DID_RESOLVER_NEGATIVE_TTL_SECS` →
-    /// `MA_DID_RESOLVER_NEGATIVE_TTL_SECS` → YAML → default `10`.
+    /// Environment variable: `MA_DID_RESOLVER_NEGATIVE_TTL_SECS`. Falls back to YAML → default `10`.
     #[arg(long)]
     pub did_resolver_negative_ttl_secs: Option<u64>,
 
     /// Path to the encrypted secret bundle file.
     /// Defaults to `XDG_CONFIG_HOME/ma/<slug>.bin`.
     ///
-    /// Resolved via `MA_<MA_DEFAULT_SLUG>_SECRET_BUNDLE` →
-    /// `MA_SECRET_BUNDLE` → YAML → XDG default.
+    /// Environment variable: `MA_SECRET_BUNDLE`. Falls back to YAML → XDG default.
     #[arg(long)]
     pub secret_bundle: Option<PathBuf>,
 
@@ -106,22 +94,19 @@ pub struct MaArgs {
     /// Prefer setting via environment variable rather than CLI to avoid
     /// shell history exposure.
     ///
-    /// Resolved via `MA_<MA_DEFAULT_SLUG>_SECRET_BUNDLE_PASSPHRASE` →
-    /// `MA_SECRET_BUNDLE_PASSPHRASE` → YAML.
+    /// Environment variable: `MA_SECRET_BUNDLE_PASSPHRASE`. Falls back to YAML.
     #[arg(long)]
     pub secret_bundle_passphrase: Option<String>,
 
     /// Kubo RPC API URL. Defaults to `http://127.0.0.1:5001`.
     ///
-    /// Resolved via `MA_<MA_DEFAULT_SLUG>_KUBO_RPC_URL` →
-    /// `MA_KUBO_RPC_URL` → YAML → default.
+    /// Environment variable: `MA_KUBO_RPC_URL`. Falls back to YAML → default.
     #[arg(long)]
     pub kubo_rpc_url: Option<String>,
 
     /// IPNS key alias used in Kubo. Defaults to the slug.
     ///
-    /// Resolved via `MA_<MA_DEFAULT_SLUG>_KUBO_KEY_ALIAS` →
-    /// `MA_KUBO_KEY_ALIAS` → YAML → slug.
+    /// Environment variable: `MA_KUBO_KEY_ALIAS`. Falls back to YAML → slug.
     #[arg(long)]
     pub kubo_key_alias: Option<String>,
 

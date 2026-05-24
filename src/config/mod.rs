@@ -10,10 +10,9 @@
 //! Native `from_args` resolves fields from (in decreasing priority):
 //!
 //! 1. Explicit CLI arguments (via [`MaArgs`])
-//! 2. `MA_<MA_DEFAULT_SLUG>_*` environment variables (slug-prefixed, set per binary)
-//! 3. `MA_*` environment variables (static fallback, shared across binaries)
-//! 4. YAML config file (`XDG_CONFIG_HOME/ma/<slug>.yaml`)
-//! 5. Built-in defaults
+//! 2. `MA_*` environment variables
+//! 3. YAML config file (`XDG_CONFIG_HOME/ma/<slug>.yaml`)
+//! 4. Built-in defaults
 //!
 //! # Native compile-time constant requirement
 //!
@@ -470,8 +469,7 @@ impl Config {
     ///
     /// Callers **MUST** pass a compile-time constant `MA_DEFAULT_SLUG: &'static str`.
     /// This determines BOTH the default slug for file naming AND the fixed
-    /// env-var prefix `MA_<MA_DEFAULT_SLUG>_*`. The prefix cannot be changed
-    /// at runtime; only file naming may be overridden via `--slug`.
+    /// env-var prefix. Only file naming may be overridden via `--slug`.
     ///
     /// ```
     /// # #[cfg(all(feature = "config", not(target_arch = "wasm32")))]
@@ -488,16 +486,11 @@ impl Config {
     ///
     /// For each field the resolution order is:
     /// 1. Explicit CLI argument
-    /// 2. `MA_<MA_DEFAULT_SLUG>_FIELD` environment variable
-    /// 3. `MA_FIELD` environment variable (static fallback)
-    /// 4. Value from the YAML config file
-    /// 5. Built-in default
+    /// 2. `MA_FIELD` environment variable
+    /// 3. Value from the YAML config file
+    /// 4. Built-in default
     #[allow(clippy::too_many_lines)]
     pub fn from_args(args: &MaArgs, default_slug: &'static str) -> Result<Self> {
-        // The env-var prefix is determined by the compile-time constant.
-        // e.g. default_slug = "panteia"  →  prefix = "PANTEIA"
-        let prefix = default_slug.to_uppercase().replace('-', "_");
-
         // Slug: CLI/env via clap (MA_SLUG) → compile-time default.
         let slug = args
             .slug
@@ -523,8 +516,7 @@ impl Config {
         // NOTE: closures borrow `yaml` and `prefix` immutably; NLL ensures
         // the borrows end before we move `yaml` below.
         let resolve_str = |cli: Option<String>, env_key: &str, default: &str| -> String {
-            cli.or_else(|| std::env::var(format!("MA_{prefix}_{env_key}")).ok())
-                .or_else(|| std::env::var(format!("MA_{env_key}")).ok())
+            cli.or_else(|| std::env::var(format!("MA_{env_key}")).ok())
                 .or_else(|| {
                     yaml.as_ref()
                         .and_then(|m| yaml_str(m, &env_key.to_lowercase()))
@@ -533,8 +525,7 @@ impl Config {
         };
 
         let resolve_opt_str = |cli: Option<String>, env_key: &str| -> Option<String> {
-            cli.or_else(|| std::env::var(format!("MA_{prefix}_{env_key}")).ok())
-                .or_else(|| std::env::var(format!("MA_{env_key}")).ok())
+            cli.or_else(|| std::env::var(format!("MA_{env_key}")).ok())
                 .or_else(|| {
                     yaml.as_ref()
                         .and_then(|m| yaml_str(m, &env_key.to_lowercase()))
@@ -543,11 +534,6 @@ impl Config {
 
         let resolve_opt_path = |cli: Option<PathBuf>, env_key: &str| -> Option<PathBuf> {
             cli.or_else(|| {
-                std::env::var(format!("MA_{prefix}_{env_key}"))
-                    .ok()
-                    .map(PathBuf::from)
-            })
-            .or_else(|| {
                 std::env::var(format!("MA_{env_key}"))
                     .ok()
                     .map(PathBuf::from)
@@ -560,11 +546,6 @@ impl Config {
 
         let resolve_u64 = |cli: Option<u64>, env_key: &str, default: u64| -> u64 {
             cli.or_else(|| {
-                std::env::var(format!("MA_{prefix}_{env_key}"))
-                    .ok()
-                    .and_then(|v| v.parse::<u64>().ok())
-            })
-            .or_else(|| {
                 std::env::var(format!("MA_{env_key}"))
                     .ok()
                     .and_then(|v| v.parse::<u64>().ok())
