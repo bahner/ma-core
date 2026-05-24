@@ -41,7 +41,6 @@ pub struct IrohEndpoint {
     /// Using one lock per key (rather than a single global lock) means a hung or slow
     /// connection attempt to one peer can never block connections to a different peer.
     connect_locks: Mutex<HashMap<(String, String), Arc<AsyncMutex<()>>>>,
-
 }
 
 impl IrohEndpoint {
@@ -67,7 +66,6 @@ impl IrohEndpoint {
             router: None,
             connection_cache: Mutex::new(HashMap::new()),
             connect_locks: Mutex::new(HashMap::new()),
-
         })
     }
 
@@ -137,7 +135,10 @@ impl IrohEndpoint {
 
         if let Some(conn) = cached {
             if conn.close_reason().is_some() {
-                debug!(endpoint_id, protocol, "cached connection already closed, evicting");
+                debug!(
+                    endpoint_id,
+                    protocol, "cached connection already closed, evicting"
+                );
                 self.connection_cache.lock().unwrap().remove(&cache_key);
             } else {
                 match conn.open_bi().await {
@@ -183,7 +184,10 @@ impl IrohEndpoint {
 
         if let Some(conn) = cached {
             if conn.close_reason().is_some() {
-                debug!(endpoint_id, protocol, "cached connection already closed (post-lock), evicting");
+                debug!(
+                    endpoint_id,
+                    protocol, "cached connection already closed (post-lock), evicting"
+                );
                 self.connection_cache.lock().unwrap().remove(&cache_key);
             } else {
                 match conn.open_bi().await {
