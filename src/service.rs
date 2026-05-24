@@ -49,15 +49,14 @@ pub const MESSAGE_TYPE_RPC: &str = "application/x-ma-rpc";
 pub const MESSAGE_TYPE_RPC_REPLY: &str = "application/x-ma-rpc-reply";
 
 // ─── CRUD message types (/ma/crud/0.0.1) ────────────────────────────────────
+//
+// Operation is encoded in the CBOR payload, not the message type:
+//   GET:    [":get",    ":path"]
+//   SET:    [":path",   value]        value = scalar or "/ipfs/…", "/ipns/…", "/ipld/…"
+//   DELETE: [":delete", ":path"]
 
-pub const MESSAGE_TYPE_CRUD_GET: &str = "application/x-ma-crud-get";
-pub const MESSAGE_TYPE_CRUD_GET_REPLY: &str = "application/x-ma-crud-get-reply";
-pub const MESSAGE_TYPE_CRUD_EDIT: &str = "application/x-ma-crud-edit";
-pub const MESSAGE_TYPE_CRUD_EDIT_REPLY: &str = "application/x-ma-crud-edit-reply";
-pub const MESSAGE_TYPE_CRUD_SET: &str = "application/x-ma-crud-set";
-pub const MESSAGE_TYPE_CRUD_SET_REPLY: &str = "application/x-ma-crud-set-reply";
-pub const MESSAGE_TYPE_CRUD_DELETE: &str = "application/x-ma-crud-delete";
-pub const MESSAGE_TYPE_CRUD_DELETE_REPLY: &str = "application/x-ma-crud-delete-reply";
+pub const MESSAGE_TYPE_CRUD: &str = "application/x-ma-crud";
+pub const MESSAGE_TYPE_CRUD_REPLY: &str = "application/x-ma-crud-reply";
 
 // ─── Content types (inner payload format) ───────────────────────────────────
 
