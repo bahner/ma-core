@@ -23,6 +23,8 @@ use tokio::sync::Mutex as AsyncMutex;
 
 const DEFAULT_MAX_INBOUND_MESSAGE_SIZE: usize = 1024 * 1024;
 
+type ConnectLocks = Mutex<HashMap<(String, String), Arc<AsyncMutex<()>>>>;
+
 /// An iroh-backed ma endpoint.
 pub struct IrohEndpoint {
     endpoint: Endpoint,
@@ -40,7 +42,7 @@ pub struct IrohEndpoint {
     ///
     /// Using one lock per key (rather than a single global lock) means a hung or slow
     /// connection attempt to one peer can never block connections to a different peer.
-    connect_locks: Mutex<HashMap<(String, String), Arc<AsyncMutex<()>>>>,
+    connect_locks: ConnectLocks,
 }
 
 impl IrohEndpoint {
