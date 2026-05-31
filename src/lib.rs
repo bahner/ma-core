@@ -123,7 +123,7 @@ pub use multiformat::{
 pub use acl::{
     check_cap, is_principal_key, is_valid_acl_key, normalize_principal, validate_acl_map, AclMap,
     CapabilityEntry, CAP_ACL, CAP_CREATE, CAP_CRUD, CAP_DELETE, CAP_INBOX, CAP_IPFS, CAP_READ,
-    CAP_RPC, CAP_UPDATE, GROUP_PREFIX,
+    CAP_RPC, CAP_UPDATE, GROUP_PREFIX, LOCAL_ENTITY_WILDCARD,
 };
 
 // ─── Re-export service constants ────────────────────────────────────────────

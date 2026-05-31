@@ -96,6 +96,33 @@ pub const CAP_ACL: &str = "acl";
 /// into that handle's group tree (e.g. `+alice.project4.admins`).
 pub const GROUP_PREFIX: &str = "+";
 
+/// Local-entity wildcard principal.
+///
+/// The bare `"#"` key in an [`AclMap`] matches **any** caller whose principal
+/// starts with `"#"` — i.e. any entity running on the same runtime instance.
+///
+/// It sits between the specific `"#<name>"` form and the global `"*"` wildcard
+/// in lookup priority:
+///
+/// ```
+/// // specific entity  > local wildcard  > global wildcard
+/// //   "#fortune"         "#"                 "*"
+/// ```
+///
+/// The runtime pre-normalises intra-runtime callers from their full DID-URL form
+/// (`did:ma:<our_did>#fortune`) to the bare fragment form (`#fortune`) before
+/// the ACL lookup, so that these keys resolve correctly.
+///
+/// ## YAML example
+///
+/// ```yaml
+/// acl:
+///   "#": [handle_cast]        # any local entity on this runtime may call
+///   "did:ma:alice": ["*"]     # remote alice: all caps
+///   "*":                      # everyone else: deny
+/// ```
+pub const LOCAL_ENTITY_WILDCARD: &str = "#";
+
 // ── CapabilityEntry ────────────────────────────────────────────────────────────
 
 /// Capability set for a principal in an [`AclMap`].
@@ -239,10 +266,17 @@ pub fn is_valid_acl_key(key: &str) -> bool {
 }
 
 /// Return `true` if `key` is a principal key (identifies *who*).
+///
+/// Valid principal key forms:
+/// - `"*"` — global wildcard
+/// - `"did:ma:<id>"` — bare DID (no fragment)
+/// - `"#"` — local-entity wildcard (any entity on this runtime)
+/// - `"#<name>"` — specific local entity by fragment name
+/// - `"+<handle>.<path>"` — group principal
 pub fn is_principal_key(key: &str) -> bool {
     key == "*"
         || (key.starts_with("did:") && !key.contains('#'))
-        || (key.starts_with('#') && key.len() > 1)
+        || key.starts_with('#')   // covers both "#" (local wildcard) and "#name" (specific)
         || is_valid_group_key(key)
 }
 
@@ -280,9 +314,16 @@ pub fn validate_acl_map(acl: &AclMap) -> Result<()> {
 
 /// Normalise a caller identity for [`AclMap`] lookup.
 ///
-/// - `did:ma:foo#bar` → `did:ma:foo` (strips fragment from DID-URLs)
-/// - `#local` → `#local` (local entity, passed through)
-/// - `*` → `*` (wildcard, passed through)
+/// - `did:ma:foo#bar` → `did:ma:foo` (strips fragment from **remote** DID-URLs)
+/// - `#local` → `#local` (already-normalised local entity, passed through)
+/// - `#` → `#` (local-entity wildcard, passed through)
+/// - `*` → `*` (global wildcard, passed through)
+///
+/// **Note:** Callers from the same runtime arrive as `did:ma:<our_did>#fragment`.
+/// The runtime is responsible for converting those to `#fragment` *before*
+/// calling this function (or [`check_cap`]) so that `"#<name>"` and `"#"`
+/// ACL keys resolve correctly.  This function only strips fragments from
+/// foreign DID-URLs; it does not know which DID belongs to the local runtime.
 pub fn normalize_principal(did: &str) -> &str {
     if did.starts_with("did:") {
         if let Some(pos) = did.find('#') {
@@ -393,7 +434,78 @@ mod tests {
         assert_eq!(normalize_principal("did:ma:foo#bar"), "did:ma:foo");
         assert_eq!(normalize_principal("did:ma:foo"), "did:ma:foo");
         assert_eq!(normalize_principal("#local"), "#local");
+        assert_eq!(normalize_principal("#"), "#");
         assert_eq!(normalize_principal("*"), "*");
+    }
+
+    // ── Local-entity wildcard ("#") tests ─────────────────────────────────────
+
+    #[test]
+    fn local_wildcard_allows_any_hash_prefixed_caller() {
+        // "#" matches any #-prefixed caller when there is no specific entry.
+        let acl = m(&[("#", allow(&[CAP_RPC]))]);
+        assert!(check_cap(&acl, "#fortune", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "#scheduler", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "#any_entity", CAP_RPC).is_ok());
+    }
+
+    #[test]
+    fn local_wildcard_does_not_match_remote_callers() {
+        // Remote DIDs do not start with '#', so "#" should not grant them.
+        let acl = m(&[("#", allow(&[CAP_RPC]))]);
+        assert!(check_cap(&acl, "did:ma:remote", CAP_RPC).is_err());
+    }
+
+    #[test]
+    fn specific_local_entity_wins_over_local_wildcard() {
+        // "#fortune" is more specific: it restricts below the "#" wildcard.
+        let acl = m(&[
+            ("#", allow(&[CAP_RPC, CAP_IPFS])),
+            ("#fortune", allow(&[CAP_RPC])), // only rpc, not ipfs
+        ]);
+        assert!(check_cap(&acl, "#fortune", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "#fortune", CAP_IPFS).is_err());
+        // Other local entities still get rpc+ipfs from the wildcard.
+        assert!(check_cap(&acl, "#other", CAP_IPFS).is_ok());
+    }
+
+    #[test]
+    fn local_wildcard_deny_blocks_all_local_entities() {
+        let acl = m(&[
+            ("#", CapabilityEntry::Deny),
+            ("*", allow(&[CAP_RPC])), // global wildcard would allow, but # deny wins
+        ]);
+        assert!(check_cap(&acl, "#fortune", CAP_RPC).is_err());
+        assert!(check_cap(&acl, "#any", CAP_RPC).is_err());
+        // Remote callers are unaffected by the "#" deny.
+        assert!(check_cap(&acl, "did:ma:remote", CAP_RPC).is_ok());
+    }
+
+    #[test]
+    fn specific_local_entity_allow_overrides_local_wildcard_deny() {
+        // "#fortune" explicit allow wins over "#" deny for that entity.
+        let acl = m(&[
+            ("#", CapabilityEntry::Deny),
+            ("#fortune", allow(&[CAP_RPC])),
+        ]);
+        assert!(check_cap(&acl, "#fortune", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "#other", CAP_RPC).is_err());
+    }
+
+    #[test]
+    fn global_wildcard_not_triggered_for_hash_caller_when_local_wildcard_present() {
+        // When "#" deny is set, "*" allow must NOT override it for local callers.
+        let acl = m(&[("#", CapabilityEntry::Deny), ("*", allow(&[CAP_RPC]))]);
+        // Local entity is denied by "#" — must not fall through to "*".
+        assert!(check_cap(&acl, "#fortune", CAP_RPC).is_err());
+    }
+
+    #[test]
+    fn local_wildcard_is_key_form_valid() {
+        assert!(is_principal_key("#"));
+        assert!(is_principal_key("#fortune"));
+        assert!(is_principal_key("*"));
+        assert!(is_principal_key("did:ma:alice"));
     }
 
     #[test]
