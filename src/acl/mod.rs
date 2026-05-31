@@ -104,7 +104,7 @@ pub const GROUP_PREFIX: &str = "+";
 /// It sits between the specific `"#<name>"` form and the global `"*"` wildcard
 /// in lookup priority:
 ///
-/// ```
+/// ```text
 /// // specific entity  > local wildcard  > global wildcard
 /// //   "#fortune"         "#"                 "*"
 /// ```
@@ -230,22 +230,32 @@ pub type AclMap = HashMap<String, CapabilityEntry>;
 #[cfg(feature = "acl")]
 pub fn check_cap(acl: &AclMap, caller: &str, cap: &str) -> Result<()> {
     let normalized = normalize_principal(caller);
+
+    // 1. Direct principal match (highest priority).
     if let Some(direct) = acl.get(normalized) {
-        match direct {
-            CapabilityEntry::Deny => {
-                return Err(Error::Acl(format!("operation denied for {caller}")));
-            }
-            CapabilityEntry::Allow(caps) if caps.contains(cap) || caps.contains("*") => {
-                return Ok(());
-            }
-            CapabilityEntry::Allow(_) => {
-                return Err(Error::Acl(format!(
+        return match direct {
+            CapabilityEntry::Deny => Err(Error::Acl(format!("operation denied for {caller}"))),
+            CapabilityEntry::Allow(caps) if caps.contains(cap) || caps.contains("*") => Ok(()),
+            CapabilityEntry::Allow(_) => Err(Error::Acl(format!(
+                "capability '{cap}' denied for {caller}"
+            ))),
+        };
+    }
+
+    // 2. Local-entity wildcard "#" — matches any `#`-prefixed caller.
+    if normalized.starts_with('#') {
+        if let Some(local_wild) = acl.get(LOCAL_ENTITY_WILDCARD) {
+            return match local_wild {
+                CapabilityEntry::Deny => Err(Error::Acl(format!("operation denied for {caller}"))),
+                CapabilityEntry::Allow(caps) if caps.contains(cap) || caps.contains("*") => Ok(()),
+                CapabilityEntry::Allow(_) => Err(Error::Acl(format!(
                     "capability '{cap}' denied for {caller}"
-                )));
-            }
+                ))),
+            };
         }
     }
 
+    // 3. Global wildcard "*" (lowest priority).
     match acl.get("*") {
         None => Err(Error::Acl(format!("no ACL entry for {caller}"))),
         Some(CapabilityEntry::Deny) => Err(Error::Acl(format!("operation denied for {caller}"))),
