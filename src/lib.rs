@@ -129,11 +129,12 @@ pub use acl::{
 // ─── Re-export service constants ────────────────────────────────────────────
 
 pub use service::{
-    Service, BROADCAST_TOPIC, CONTENT_TYPE_CBOR, CONTENT_TYPE_TERM, CRUD_PROTOCOL_ID,
-    INBOX_PROTOCOL_ID, IPFS_PROTOCOL_ID, MESSAGE_TYPE_BROADCAST, MESSAGE_TYPE_CHAT,
-    MESSAGE_TYPE_CRUD, MESSAGE_TYPE_CRUD_REPLY, MESSAGE_TYPE_DOC, MESSAGE_TYPE_EMOTE,
-    MESSAGE_TYPE_IPFS_REQUEST, MESSAGE_TYPE_IPFS_STORE, MESSAGE_TYPE_MESSAGE, MESSAGE_TYPE_RPC,
-    MESSAGE_TYPE_RPC_REPLY, RPC_PROTOCOL_ID,
+    Service, BROADCAST_TOPIC, CONTENT_TYPE_CBOR, CONTENT_TYPE_TERM, CONTENT_TYPE_TERM_CBOR,
+    CONTENT_TYPE_TERM_DAG_CBOR, CONTENT_TYPE_TERM_YAML, CRUD_PROTOCOL_ID, INBOX_PROTOCOL_ID,
+    IPFS_PROTOCOL_ID, MESSAGE_TYPE_BROADCAST, MESSAGE_TYPE_CHAT, MESSAGE_TYPE_CRUD,
+    MESSAGE_TYPE_CRUD_REPLY, MESSAGE_TYPE_DOC, MESSAGE_TYPE_EMOTE, MESSAGE_TYPE_IPFS_REQUEST,
+    MESSAGE_TYPE_IPFS_STORE, MESSAGE_TYPE_MESSAGE, MESSAGE_TYPE_RPC, MESSAGE_TYPE_RPC_REPLY,
+    RPC_PROTOCOL_ID,
 };
 
 // ─── Re-export Inbox ────────────────────────────────────────────────────────
@@ -155,8 +156,8 @@ pub use outbox::Outbox;
 /// This keeps the transport backend type internal while exposing
 /// [`MaEndpoint`] and [`Outbox`] as stable API surfaces.
 #[cfg(feature = "iroh")]
-pub async fn new_ma_endpoint(secret_bytes: [u8; 32]) -> Result<Box<dyn MaEndpoint>> {
-    let endpoint = iroh::new_endpoint(secret_bytes).await?;
+pub async fn new_ma_endpoint(secret_bytes: [u8; 32], ipv6: bool) -> Result<Box<dyn MaEndpoint>> {
+    let endpoint = iroh::new_endpoint(secret_bytes, ipv6).await?;
     Ok(Box::new(endpoint))
 }
 

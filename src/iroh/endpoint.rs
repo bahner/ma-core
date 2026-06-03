@@ -47,13 +47,36 @@ pub struct IrohEndpoint {
 
 impl IrohEndpoint {
     /// Create an endpoint from raw 32-byte secret key material.
-    pub async fn new(secret_bytes: [u8; 32]) -> Result<Self> {
+    ///
+    /// When `ipv6` is `false` the endpoint binds an IPv4-only socket
+    /// (`0.0.0.0:0`). This suppresses the `NetworkUnreachable` warnings that
+    /// appear on hosts without a working IPv6 stack.
+    pub async fn new(secret_bytes: [u8; 32], ipv6: bool) -> Result<Self> {
         let secret = SecretKey::from_bytes(&secret_bytes);
-        let endpoint = Endpoint::builder(presets::N0)
-            .secret_key(secret)
-            .bind()
-            .await
-            .map_err(|e| Error::Transport(format!("endpoint bind failed: {e}")))?;
+        let endpoint = if ipv6 {
+            Endpoint::builder(presets::N0)
+                .secret_key(secret)
+                .bind()
+                .await
+                .map_err(|e| Error::Transport(format!("endpoint bind failed: {e}")))?
+        } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            let ep = Endpoint::builder(presets::N0)
+                .secret_key(secret)
+                .clear_ip_transports()
+                .bind_addr("0.0.0.0:0")
+                .map_err(|e| Error::Transport(format!("endpoint bind_addr failed: {e}")))?
+                .bind()
+                .await
+                .map_err(|e| Error::Transport(format!("endpoint bind failed: {e}")))?;
+            #[cfg(target_arch = "wasm32")]
+            let ep = Endpoint::builder(presets::N0)
+                .secret_key(secret)
+                .bind()
+                .await
+                .map_err(|e| Error::Transport(format!("endpoint bind failed: {e}")))?;
+            ep
+        };
         endpoint.online().await;
 
         debug!(
@@ -612,7 +635,7 @@ mod tests {
         use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;
 
-        let mut endpoint = IrohEndpoint::new(test_secret()).await.unwrap();
+        let mut endpoint = IrohEndpoint::new(test_secret(), true).await.unwrap();
         let inbox_a = endpoint.service("/ma/inbox/0.0.1");
         let inbox_b = endpoint.service("/ma/inbox/0.0.1");
 
@@ -629,7 +652,7 @@ mod tests {
         use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;
 
-        let mut endpoint = IrohEndpoint::new(test_secret()).await.unwrap();
+        let mut endpoint = IrohEndpoint::new(test_secret(), true).await.unwrap();
         assert!(endpoint.router.is_none(), "router should start stopped");
 
         endpoint.service("/ma/inbox/0.0.1");
@@ -648,7 +671,7 @@ mod tests {
         use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;
 
-        let mut endpoint = IrohEndpoint::new(test_secret()).await.unwrap();
+        let mut endpoint = IrohEndpoint::new(test_secret(), true).await.unwrap();
         let _inbox = endpoint.service("/ma/custom/1.0");
         assert!(endpoint
             .services()
@@ -677,7 +700,7 @@ mod tests {
         use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;
 
-        let mut endpoint = IrohEndpoint::new(test_secret()).await.unwrap();
+        let mut endpoint = IrohEndpoint::new(test_secret(), true).await.unwrap();
         endpoint.service("/ma/inbox/0.0.1");
         endpoint.start_router();
         assert!(

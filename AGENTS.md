@@ -5,6 +5,15 @@ both native and `wasm32-unknown-unknown`. No binary is produced here.
 
 ---
 
+## Agent rules
+
+- **Never modify files in this repo without explicit user approval.**
+  `ma-core` is a shared dependency used by multiple downstream crates
+  (`ma-runtime`, `ma-agent`, etc.). Unannounced changes here break all
+  consumers silently. Always ask before editing any file here.
+
+---
+
 ## Crate structure
 
 ```text

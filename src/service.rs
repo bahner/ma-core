@@ -65,3 +65,13 @@ pub const CONTENT_TYPE_CBOR: &str = "application/cbor";
 /// is a dispatchable atom, e.g. `[:ok, data]` or `[:error, reason]`).
 /// Used as `contentType` for RPC and CRUD messages.
 pub const CONTENT_TYPE_TERM: &str = "application/x-ma-term";
+/// Raw CBOR data payload — e.g. an `EntityNode` struct or a `Vec<String>` names list.
+/// The `+cbor` suffix follows RFC 6838 §4.2.8 structured-syntax conventions.
+pub const CONTENT_TYPE_TERM_CBOR: &str = "application/x-ma-term+cbor";
+/// CID pointer — the CBOR payload is a text string holding a `CIDv1` that
+/// addresses a DAG-CBOR node in IPFS.  Receivers should fetch and decode it.
+pub const CONTENT_TYPE_TERM_DAG_CBOR: &str = "application/x-ma-term+dag-cbor";
+/// Inline YAML string — the CBOR payload is a text string containing a
+/// UTF-8 YAML document.  Suitable for config values (scalars, sequences,
+/// mappings) that do not need to be stored as separate IPFS objects.
+pub const CONTENT_TYPE_TERM_YAML: &str = "application/x-ma-term+yaml";
