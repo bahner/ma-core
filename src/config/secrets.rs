@@ -509,4 +509,91 @@ mod tests {
         let encrypted = bundle.encrypt("correct").unwrap();
         assert!(SecretBundle::decrypt(&encrypted, "wrong").is_err());
     }
+
+    #[test]
+    fn get_key_returns_none_for_missing_name() {
+        let bundle = SecretBundle::generate();
+        assert!(bundle.get_key("nonexistent").is_none());
+    }
+
+    #[test]
+    fn remove_key_returns_and_deletes_key() {
+        let mut bundle = SecretBundle::generate();
+        let key = bundle.generate_key("to_remove").unwrap();
+        let removed = bundle.remove_key("to_remove");
+        assert_eq!(removed, Some(key));
+        assert!(bundle.get_key("to_remove").is_none());
+    }
+
+    #[test]
+    fn extra_key_names_lists_all_added_keys() {
+        let mut bundle = SecretBundle::generate();
+        bundle.generate_key("alpha").unwrap();
+        bundle.generate_key("beta").unwrap();
+        let mut names: Vec<&str> = bundle.extra_key_names().collect();
+        names.sort_unstable();
+        assert_eq!(names, ["alpha", "beta"]);
+    }
+
+    #[test]
+    fn generate_passphrase_is_43_alphanumeric_chars() {
+        let p = SecretBundle::generate_passphrase();
+        assert_eq!(p.len(), 43);
+        assert!(p.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn truncated_blob_fails_decryption() {
+        let bundle = SecretBundle::generate();
+        let encrypted = bundle.encrypt("pass").unwrap();
+        assert!(SecretBundle::decrypt(&encrypted[..10], "pass").is_err());
+    }
+
+    #[test]
+    fn generate_identity_is_deterministic() {
+        let bundle = SecretBundle::generate();
+        let id1 = bundle.generate_identity().unwrap();
+        let id2 = bundle.generate_identity().unwrap();
+        assert_eq!(
+            id1.document.id, id2.document.id,
+            "same bundle must always produce the same DID"
+        );
+        assert_eq!(
+            id1.signing_private_key_hex, id2.signing_private_key_hex,
+            "same bundle must always produce the same signing key"
+        );
+    }
+
+    #[test]
+    fn signing_key_public_key_matches_document_assertion_method() {
+        let bundle = SecretBundle::generate();
+        let identity = bundle.generate_identity().unwrap();
+        let signing_key = bundle.signing_key().unwrap();
+        let sign_vm_id = &identity.document.assertion_method[0];
+        let sign_vm = identity
+            .document
+            .get_verification_method_by_id(sign_vm_id)
+            .unwrap();
+        assert_eq!(
+            signing_key.public_key_multibase, sign_vm.public_key_multibase,
+            "signing_key() must match the document's assertion method VM"
+        );
+    }
+
+    #[test]
+    fn add_key_stores_and_retrieves_exact_bytes() {
+        let mut bundle = SecretBundle::generate();
+        let key_bytes = [0xAB_u8; 32];
+        bundle.add_key("exact", key_bytes).unwrap();
+        assert_eq!(bundle.get_key("exact"), Some(&key_bytes));
+    }
+
+    #[test]
+    fn two_encryptions_of_same_bundle_produce_different_ciphertext() {
+        // Salt and nonce are random per call — ciphertexts must differ.
+        let bundle = SecretBundle::generate();
+        let c1 = bundle.encrypt("pw").unwrap();
+        let c2 = bundle.encrypt("pw").unwrap();
+        assert_ne!(c1, c2, "each encryption must use a fresh salt+nonce");
+    }
 }

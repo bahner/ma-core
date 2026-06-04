@@ -56,3 +56,97 @@ pub fn signature_multibase_decode(input: &str) -> Result<(u64, Vec<u8>)> {
     let decoded = multibase_decode(input)?;
     multicodec_decode(&decoded)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multicodec_round_trip_dag_cbor() {
+        let payload = b"hello dag-cbor";
+        let encoded = multicodec_encode(CODEC_DAG_CBOR, payload);
+        let (codec, decoded) = multicodec_decode(&encoded).unwrap();
+        assert_eq!(codec, CODEC_DAG_CBOR);
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn multicodec_round_trip_identity() {
+        let payload = b"raw bytes";
+        let encoded = multicodec_encode(CODEC_IDENTITY, payload);
+        let (codec, decoded) = multicodec_decode(&encoded).unwrap();
+        assert_eq!(codec, CODEC_IDENTITY);
+        assert_eq!(decoded.as_slice(), payload);
+    }
+
+    #[test]
+    fn multicodec_round_trip_large_codec_varint() {
+        // CODEC_DAG_JSON (0x0129) requires a 2-byte varint — exercises multi-byte encoding.
+        let payload = b"json payload";
+        let encoded = multicodec_encode(CODEC_DAG_JSON, payload);
+        let (codec, decoded) = multicodec_decode(&encoded).unwrap();
+        assert_eq!(codec, CODEC_DAG_JSON);
+        assert_eq!(decoded.as_slice(), payload);
+    }
+
+    #[test]
+    fn multicodec_decode_empty_payload_fails() {
+        // A valid varint prefix with no payload following it should be rejected.
+        let mut buf = unsigned_varint::encode::u64_buffer();
+        let prefix = unsigned_varint::encode::u64(CODEC_CBOR, &mut buf);
+        assert!(multicodec_decode(prefix).is_err());
+    }
+
+    #[test]
+    fn multicodec_decode_empty_slice_fails() {
+        assert!(multicodec_decode(&[]).is_err());
+    }
+
+    #[test]
+    fn multibase_round_trip() {
+        let data = b"test data 12345";
+        let encoded = multibase_encode(data);
+        assert!(
+            encoded.starts_with('z'),
+            "base58btc multibase prefix is 'z'"
+        );
+        let decoded = multibase_decode(&encoded).unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn multibase_decode_invalid_input_fails() {
+        assert!(multibase_decode("!!!not-valid!!!").is_err());
+    }
+
+    #[test]
+    fn public_key_multibase_round_trip() {
+        // Use the Ed25519 public key codec (0xed).
+        let codec = 0xed_u64;
+        let key_bytes = [42u8; 32];
+        let encoded = public_key_multibase_encode(codec, &key_bytes);
+        let (decoded_codec, decoded_bytes) = public_key_multibase_decode(&encoded).unwrap();
+        assert_eq!(decoded_codec, codec);
+        assert_eq!(decoded_bytes.as_slice(), &key_bytes);
+    }
+
+    #[test]
+    fn signature_multibase_round_trip() {
+        // Use the EdDSA signature codec (0xd0ed).
+        let codec = 0xd0ed_u64;
+        let sig_bytes = [99u8; 64];
+        let encoded = signature_multibase_encode(codec, &sig_bytes);
+        let (decoded_codec, decoded_bytes) = signature_multibase_decode(&encoded).unwrap();
+        assert_eq!(decoded_codec, codec);
+        assert_eq!(decoded_bytes.as_slice(), &sig_bytes);
+    }
+
+    #[test]
+    fn multicodec_encode_prepends_prefix_bytes() {
+        // CODEC_IDENTITY = 0x00 → single zero byte prefix.
+        let payload = b"x";
+        let encoded = multicodec_encode(CODEC_IDENTITY, payload);
+        assert_eq!(encoded[0], 0x00);
+        assert_eq!(&encoded[1..], payload);
+    }
+}

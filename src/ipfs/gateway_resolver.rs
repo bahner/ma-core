@@ -1,9 +1,6 @@
 //! IPFS gateway DID document resolver traits and implementations.
 
 use crate::Document;
-#[cfg(target_arch = "wasm32")]
-use async_trait::async_trait;
-#[cfg(not(target_arch = "wasm32"))]
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -377,5 +374,126 @@ mod tests {
     fn rejects_non_document_payloads() {
         let err = parse_document_bytes(b"<html>nope</html>").expect_err("invalid payload");
         assert!(err.contains("CBOR decode failed"));
+    }
+
+    #[test]
+    fn parses_json_fallback_when_cbor_fails() {
+        let identity = generate_identity_from_secret([5u8; 32]).expect("identity");
+        let json = serde_json::to_vec(&identity.document).expect("json serialize");
+        let parsed = parse_document_bytes(&json).expect("JSON fallback should succeed");
+        assert_eq!(parsed, identity.document);
+    }
+
+    #[test]
+    fn is_localhost_gateway_matches_local_addresses() {
+        use super::is_localhost_gateway;
+        assert!(is_localhost_gateway("http://127.0.0.1:8080/"));
+        assert!(is_localhost_gateway("http://127.0.0.1:5001/"));
+        assert!(is_localhost_gateway("http://localhost:8080/"));
+        assert!(!is_localhost_gateway("https://dweb.link/"));
+        assert!(!is_localhost_gateway("https://w3s.link/"));
+    }
+
+    #[test]
+    fn normalize_gateway_url_adds_missing_trailing_slash() {
+        use super::normalize_gateway_url;
+        assert_eq!(
+            normalize_gateway_url("https://dweb.link"),
+            "https://dweb.link/"
+        );
+        assert_eq!(
+            normalize_gateway_url("https://dweb.link/"),
+            "https://dweb.link/"
+        );
+        assert_eq!(
+            normalize_gateway_url("  https://dweb.link  "),
+            "https://dweb.link/"
+        );
+    }
+
+    #[test]
+    fn push_gateway_deduplicates_case_insensitively() {
+        use super::push_gateway;
+        let mut gateways = Vec::new();
+        push_gateway(&mut gateways, "https://dweb.link/");
+        push_gateway(&mut gateways, "https://dweb.link/"); // exact duplicate
+        push_gateway(&mut gateways, "https://dweb.link"); // no trailing slash
+        assert_eq!(gateways.len(), 1, "duplicates must not be added");
+    }
+
+    #[test]
+    fn block_localhost_until_and_unblock() {
+        use super::IpfsGatewayResolver;
+        use web_time::{Duration, Instant};
+        let resolver = IpfsGatewayResolver::default();
+        let now = Instant::now();
+
+        assert!(
+            !resolver.localhost_is_blocked(now),
+            "should start unblocked"
+        );
+        resolver.block_localhost_until(Some(now + Duration::from_mins(1)));
+        assert!(
+            resolver.localhost_is_blocked(now),
+            "should be blocked after setting future deadline"
+        );
+        resolver.block_localhost_until(None);
+        assert!(
+            !resolver.localhost_is_blocked(now),
+            "should be unblocked after clearing deadline"
+        );
+    }
+
+    #[test]
+    fn cache_write_and_read_hit() {
+        use super::{CacheValue, IpfsGatewayResolver};
+        use web_time::{Duration, Instant};
+        let resolver = IpfsGatewayResolver::default();
+        let identity = generate_identity_from_secret([9u8; 32]).expect("identity");
+        let cbor = identity.document.encode().expect("cbor");
+        let did = identity.document.id.clone();
+        let expires_at = Instant::now() + Duration::from_mins(1);
+
+        resolver.write_cache(did.clone(), CacheValue::Hit(cbor.clone()), expires_at);
+        let cached = resolver.read_cache(&did, true, true);
+        assert!(matches!(cached, Some(CacheValue::Hit(ref b)) if *b == cbor));
+    }
+
+    #[test]
+    fn cache_miss_not_returned_when_miss_disabled() {
+        use super::{CacheValue, IpfsGatewayResolver};
+        use web_time::{Duration, Instant};
+        let resolver = IpfsGatewayResolver::default();
+        let expires_at = Instant::now() + Duration::from_mins(1);
+
+        resolver.write_cache(
+            "did:ma:test".to_string(),
+            CacheValue::Miss("some error".to_string()),
+            expires_at,
+        );
+        // cache_miss_enabled = false → miss should not be returned
+        let cached = resolver.read_cache("did:ma:test", true, false);
+        assert!(
+            cached.is_none(),
+            "miss should not be returned when miss-cache is disabled"
+        );
+    }
+
+    #[test]
+    fn expired_cache_entry_is_evicted() {
+        use super::{CacheValue, IpfsGatewayResolver};
+        use web_time::Instant;
+        let resolver = IpfsGatewayResolver::default();
+        let identity = generate_identity_from_secret([11u8; 32]).expect("identity");
+        let cbor = identity.document.encode().expect("cbor");
+        let did = identity.document.id.clone();
+        // Set expiry in the past.
+        let already_expired = Instant::now()
+            .checked_sub(web_time::Duration::from_secs(1))
+            .unwrap();
+
+        resolver.write_cache(did.clone(), CacheValue::Hit(cbor), already_expired);
+        let cached = resolver.read_cache(&did, true, true);
+        assert!(cached.is_none(), "expired entry must not be returned");
     }
 }

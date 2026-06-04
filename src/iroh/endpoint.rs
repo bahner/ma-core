@@ -716,4 +716,73 @@ mod tests {
 
         endpoint.close().await;
     }
+
+    // ─── Pure unit tests (no network) ────────────────────────────────────────
+
+    #[test]
+    fn normalize_protocol_adds_leading_slash() {
+        use super::normalize_protocol;
+        assert_eq!(normalize_protocol("ma/inbox/0.0.1"), "/ma/inbox/0.0.1");
+    }
+
+    #[test]
+    fn normalize_protocol_preserves_existing_leading_slash() {
+        use super::normalize_protocol;
+        assert_eq!(normalize_protocol("/ma/inbox/0.0.1"), "/ma/inbox/0.0.1");
+    }
+
+    #[test]
+    fn normalize_protocol_strips_multiple_leading_slashes() {
+        use super::normalize_protocol;
+        assert_eq!(normalize_protocol("///ma/custom/1.0"), "/ma/custom/1.0");
+    }
+
+    #[test]
+    fn normalize_protocol_empty_string_stays_empty() {
+        use super::normalize_protocol;
+        assert_eq!(normalize_protocol(""), "");
+    }
+
+    #[test]
+    fn normalize_protocol_whitespace_only_stays_empty() {
+        use super::normalize_protocol;
+        assert_eq!(normalize_protocol("   "), "");
+    }
+
+    #[test]
+    fn message_created_at_secs_floors_fractional_value() {
+        use super::message_created_at_secs;
+        assert_eq!(message_created_at_secs(1_000_000.9), 1_000_000);
+    }
+
+    #[test]
+    fn message_created_at_secs_zero_returns_zero() {
+        use super::message_created_at_secs;
+        assert_eq!(message_created_at_secs(0.0), 0);
+    }
+
+    #[test]
+    fn message_created_at_secs_negative_returns_zero() {
+        use super::message_created_at_secs;
+        assert_eq!(message_created_at_secs(-1.0), 0);
+    }
+
+    #[test]
+    fn message_created_at_secs_nan_returns_zero() {
+        use super::message_created_at_secs;
+        assert_eq!(message_created_at_secs(f64::NAN), 0);
+    }
+
+    #[test]
+    fn message_created_at_secs_infinity_returns_zero() {
+        use super::message_created_at_secs;
+        // +Infinity is not finite → falls into the 0 branch.
+        assert_eq!(message_created_at_secs(f64::INFINITY), 0);
+    }
+
+    #[test]
+    fn message_created_at_secs_u64_max_returns_u64_max() {
+        use super::message_created_at_secs;
+        assert_eq!(message_created_at_secs(u64::MAX as f64), u64::MAX);
+    }
 }
