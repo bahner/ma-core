@@ -155,7 +155,7 @@ impl IrohEndpoint {
                 endpoint_id,
                 protocol, "cached connection already closed{}, evicting", label
             );
-            self.connection_cache.lock().unwrap().remove(cache_key);
+            self.evict_if_closed(cache_key);
             return None;
         }
 
@@ -172,9 +172,33 @@ impl IrohEndpoint {
                     "cached connection stale{}, reconnecting",
                     label,
                 );
-                self.connection_cache.lock().unwrap().remove(cache_key);
+                self.evict_if_closed(cache_key);
                 None
             }
+        }
+    }
+
+    /// Evict the cache entry for `cache_key` only if the current entry is
+    /// already closed.
+    ///
+    /// This prevents a TOCTOU race in [`try_cached_channel`]: the connection is
+    /// cloned under one lock acquisition and the eviction requires a second one.
+    /// In the window between the two, a concurrent slow-path task may have
+    /// already evicted the stale entry and inserted a fresh, live connection.
+    /// A blind `remove(key)` would then delete that fresh connection, forcing
+    /// yet another reconnect on the next call.
+    ///
+    /// By re-checking `close_reason()` inside the lock we ensure we only evict
+    /// an entry that is still dead.  If another task has already replaced it
+    /// with a live connection (`close_reason() == None`), we leave it alone;
+    /// the slow-path reconnect that follows will overwrite the bad entry anyway.
+    fn evict_if_closed(&self, cache_key: &(String, String)) {
+        let mut cache = self.connection_cache.lock().unwrap();
+        if cache
+            .get(cache_key)
+            .is_some_and(|c| c.close_reason().is_some())
+        {
+            cache.remove(cache_key);
         }
     }
 
