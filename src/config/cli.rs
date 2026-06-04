@@ -63,7 +63,7 @@ pub struct MaArgs {
 
     /// Log level for stdout output (`trace`, `debug`, `info`, `warn`, `error`).
     ///
-    /// Environment variable: `MA_LOG_LEVEL_STDOUT`. Falls back to YAML → default `"warn"`.
+    /// Environment variable: `MA_LOG_LEVEL_STDOUT`. Falls back to YAML → default `"info"`.
     #[arg(long)]
     pub log_level_stdout: Option<String>,
 

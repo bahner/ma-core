@@ -481,43 +481,41 @@ pub async fn fetch_did_document(kubo_url: &str, did: &Did) -> Result<Document> {
 
     for attempt in 1..=4 {
         // DID documents are stored as DAG-CBOR via dag/put.
-        match dag_get::<Document>(kubo_url, &ipns_path).await {
+        let dag_err = match dag_get::<Document>(kubo_url, &ipns_path).await {
             Ok(doc) => {
                 document = Some(doc);
                 break;
             }
-            Err(dag_err) => {
-                // Fallback: resolve IPNS manually then dag_get the CID.
-                match name_resolve(kubo_url, &ipns_path, true).await {
-                    Ok(resolved_path) => {
-                        match dag_get::<Document>(kubo_url, &resolved_path).await {
-                            Ok(doc) => {
-                                document = Some(doc);
-                                break;
-                            }
-                            Err(err) => {
-                                last_err = Some(anyhow!(
-                                    "dag_get failed for {}: direct={} resolved={}",
-                                    ipns_path,
-                                    dag_err,
-                                    err
-                                ));
-                            }
-                        }
-                    }
-                    Err(resolve_err) => {
-                        last_err = Some(anyhow!(
-                            "dag_get and name/resolve both failed for {}: dag={} resolve={}",
-                            ipns_path,
-                            dag_err,
-                            resolve_err
-                        ));
-                        if !should_retry_name_resolve_error(&resolve_err) {
-                            break;
-                        }
-                    }
+            Err(e) => e,
+        };
+
+        // Fallback: resolve IPNS manually then dag_get the CID.
+        match name_resolve(kubo_url, &ipns_path, true).await {
+            Err(resolve_err) => {
+                last_err = Some(anyhow!(
+                    "dag_get and name/resolve both failed for {}: dag={} resolve={}",
+                    ipns_path,
+                    dag_err,
+                    resolve_err
+                ));
+                if !should_retry_name_resolve_error(&resolve_err) {
+                    break;
                 }
             }
+            Ok(resolved_path) => match dag_get::<Document>(kubo_url, &resolved_path).await {
+                Ok(doc) => {
+                    document = Some(doc);
+                    break;
+                }
+                Err(err) => {
+                    last_err = Some(anyhow!(
+                        "dag_get failed for {}: direct={} resolved={}",
+                        ipns_path,
+                        dag_err,
+                        err
+                    ));
+                }
+            },
         }
 
         if attempt < 4 {

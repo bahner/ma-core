@@ -54,7 +54,7 @@ use serde::{Deserialize, Serialize};
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
 const DEFAULT_LOG_LEVEL: &str = "info";
-const DEFAULT_LOG_LEVEL_STDOUT: &str = "warn";
+const DEFAULT_LOG_LEVEL_STDOUT: &str = "info";
 const DEFAULT_DID_RESOLVER_POSITIVE_TTL_SECS: u64 = 60;
 const DEFAULT_DID_RESOLVER_NEGATIVE_TTL_SECS: u64 = 10;
 #[cfg(not(target_arch = "wasm32"))]

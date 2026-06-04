@@ -131,6 +131,53 @@ impl IrohEndpoint {
         Ok(Channel::new(connection, send))
     }
 
+    /// Try to reuse a cached connection for `cache_key`, if one exists.
+    ///
+    /// Returns `Some(Channel)` if a working cached connection was found and
+    /// `open_bi` succeeded, or `None` if the entry was absent, already closed,
+    /// or stale (in which case the entry is evicted so the caller can reconnect).
+    async fn try_cached_channel(
+        &self,
+        cache_key: &(String, String),
+        endpoint_id: &str,
+        protocol: &str,
+        label: &str,
+    ) -> Option<Channel> {
+        let conn = self
+            .connection_cache
+            .lock()
+            .unwrap()
+            .get(cache_key)
+            .cloned()?;
+
+        if conn.close_reason().is_some() {
+            debug!(
+                endpoint_id,
+                protocol, "cached connection already closed{}, evicting", label
+            );
+            self.connection_cache.lock().unwrap().remove(cache_key);
+            return None;
+        }
+
+        match conn.open_bi().await {
+            Ok((send, _recv)) => {
+                debug!(endpoint_id, protocol, "reusing cached connection{}", label);
+                Some(Channel::new(conn, send))
+            }
+            Err(err) => {
+                debug!(
+                    endpoint_id,
+                    protocol,
+                    error = %err,
+                    "cached connection stale{}, reconnecting",
+                    label,
+                );
+                self.connection_cache.lock().unwrap().remove(cache_key);
+                None
+            }
+        }
+    }
+
     /// Like [`open_addr`] but reuses a cached connection when available.
     ///
     /// The cache stores a `Connection` clone.  Because iroh `Connection` is an
@@ -151,37 +198,11 @@ impl IrohEndpoint {
         let cache_key = (endpoint_id.to_string(), protocol.to_string());
 
         // Fast path: try to reuse an existing open connection (no async lock needed).
-        let cached = self
-            .connection_cache
-            .lock()
-            .unwrap()
-            .get(&cache_key)
-            .cloned();
-
-        if let Some(conn) = cached {
-            if conn.close_reason().is_some() {
-                debug!(
-                    endpoint_id,
-                    protocol, "cached connection already closed, evicting"
-                );
-                self.connection_cache.lock().unwrap().remove(&cache_key);
-            } else {
-                match conn.open_bi().await {
-                    Ok((send, _recv)) => {
-                        debug!(endpoint_id, protocol, "reusing cached connection");
-                        return Ok(Channel::new(conn, send));
-                    }
-                    Err(err) => {
-                        debug!(
-                            endpoint_id,
-                            protocol,
-                            error = %err,
-                            "cached connection stale, reconnecting"
-                        );
-                        self.connection_cache.lock().unwrap().remove(&cache_key);
-                    }
-                }
-            }
+        if let Some(channel) = self
+            .try_cached_channel(&cache_key, endpoint_id, protocol, "")
+            .await
+        {
+            return Ok(channel);
         }
 
         // Slow path: serialise concurrent fresh-connection attempts *per key*.
@@ -200,40 +221,11 @@ impl IrohEndpoint {
 
         // Re-check after acquiring the lock — another task may have just
         // connected and cached the result while we were waiting.
-        let cached = self
-            .connection_cache
-            .lock()
-            .unwrap()
-            .get(&cache_key)
-            .cloned();
-
-        if let Some(conn) = cached {
-            if conn.close_reason().is_some() {
-                debug!(
-                    endpoint_id,
-                    protocol, "cached connection already closed (post-lock), evicting"
-                );
-                self.connection_cache.lock().unwrap().remove(&cache_key);
-            } else {
-                match conn.open_bi().await {
-                    Ok((send, _recv)) => {
-                        debug!(
-                            endpoint_id,
-                            protocol, "reusing cached connection (post-lock)"
-                        );
-                        return Ok(Channel::new(conn, send));
-                    }
-                    Err(err) => {
-                        debug!(
-                            endpoint_id,
-                            protocol,
-                            error = %err,
-                            "cached connection stale after lock, reconnecting"
-                        );
-                        self.connection_cache.lock().unwrap().remove(&cache_key);
-                    }
-                }
-            }
+        if let Some(channel) = self
+            .try_cached_channel(&cache_key, endpoint_id, protocol, " (post-lock)")
+            .await
+        {
+            return Ok(channel);
         }
 
         // Establish a fresh connection and cache a clone.
