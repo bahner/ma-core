@@ -193,7 +193,10 @@ impl DidDocumentResolver for IpfsGatewayResolver {
 
             let url = format!("{}ipns/{}", gateway, parsed.ipns);
 
-            let req = self.client.get(&url);
+            let req = self
+                .client
+                .get(&url)
+                .header(reqwest::header::ACCEPT, "application/vnd.ipld.dag-cbor");
             #[cfg(target_arch = "wasm32")]
             let req = {
                 let timeout = self
@@ -346,7 +349,15 @@ fn is_localhost_gateway(gateway: &str) -> bool {
 }
 
 fn parse_document_bytes(bytes: &[u8]) -> std::result::Result<Document, String> {
-    Document::decode(bytes).map_err(|err| format!("CBOR decode failed: {err}"))
+    // Try DAG-CBOR first (canonical wire format; what dweb.link and Kubo return
+    // when the client sends Accept: application/vnd.ipld.dag-cbor).
+    if let Ok(doc) = Document::decode(bytes) {
+        return Ok(doc);
+    }
+    // Fallback: some gateways (e.g. a local Kubo that ignores the Accept header)
+    // may return DAG-JSON or plain JSON.
+    serde_json::from_slice::<Document>(bytes)
+        .map_err(|json_err| format!("CBOR decode failed and JSON fallback also failed: {json_err}"))
 }
 
 #[cfg(test)]
