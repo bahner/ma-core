@@ -4,10 +4,11 @@ use web_time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use iroh::{
-    endpoint::{presets, Connection},
+    endpoint::{presets, Connection, SendStream},
     protocol::{AcceptError, ProtocolHandler, Router},
     Endpoint, EndpointAddr, EndpointId, SecretKey,
 };
+use tokio::io::AsyncWriteExt;
 use tracing::{debug, warn};
 
 use crate::endpoint::{MaEndpoint, DEFAULT_INBOX_CAPACITY};
@@ -124,10 +125,11 @@ impl IrohEndpoint {
             .connect(addr, protocol.as_bytes())
             .await
             .map_err(|e| Error::Transport(format!("connect failed: {e}")))?;
-        let (send, _recv) = connection
+        let (send, mut recv) = connection
             .open_bi()
             .await
             .map_err(|e| Error::Transport(format!("open_bi failed: {e}")))?;
+        let _ = recv.stop(0u32.into());
         Ok(Channel::new(connection, send))
     }
 
@@ -160,7 +162,8 @@ impl IrohEndpoint {
         }
 
         match conn.open_bi().await {
-            Ok((send, _recv)) => {
+            Ok((send, mut recv)) => {
+                let _ = recv.stop(0u32.into());
                 debug!(endpoint_id, protocol, "reusing cached connection{}", label);
                 Some(Channel::new(conn, send))
             }
@@ -258,10 +261,11 @@ impl IrohEndpoint {
             .connect(addr, protocol.as_bytes())
             .await
             .map_err(|e| Error::Transport(format!("connect failed: {e}")))?;
-        let (send, _recv) = connection
+        let (send, mut recv) = connection
             .open_bi()
             .await
             .map_err(|e| Error::Transport(format!("open_bi failed: {e}")))?;
+        let _ = recv.stop(0u32.into());
 
         self.connection_cache
             .lock()
@@ -343,6 +347,78 @@ impl IrohEndpoint {
         self.start_router();
     }
 
+    /// Get an existing cached connection to `endpoint_id`/`protocol`, or establish a
+    /// new one.
+    ///
+    /// Unlike [`open_addr_cached`] this does **not** open a bi-directional stream on the
+    /// connection.  Use this when you want to warm up the connection for future sends
+    /// without causing the accepting side to block on an idle stream.
+    async fn get_or_connect(
+        &self,
+        endpoint_id: &str,
+        addr: EndpointAddr,
+        protocol: &str,
+    ) -> Result<Connection> {
+        let cache_key = (endpoint_id.to_string(), protocol.to_string());
+
+        // Fast path: reuse live cached connection.
+        if let Some(conn) = self
+            .connection_cache
+            .lock()
+            .unwrap()
+            .get(&cache_key)
+            .cloned()
+        {
+            if conn.close_reason().is_none() {
+                debug!(endpoint_id, protocol, "reusing cached connection");
+                return Ok(conn);
+            }
+            self.evict_if_closed(&cache_key);
+        }
+
+        // Slow path: serialise concurrent fresh-connection attempts per key.
+        let peer_lock = {
+            let mut locks = self.connect_locks.lock().unwrap();
+            locks
+                .entry(cache_key.clone())
+                .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+                .clone()
+        };
+        let _connect_guard = peer_lock.lock().await;
+
+        // Re-check after acquiring the lock.
+        if let Some(conn) = self
+            .connection_cache
+            .lock()
+            .unwrap()
+            .get(&cache_key)
+            .cloned()
+        {
+            if conn.close_reason().is_none() {
+                debug!(
+                    endpoint_id,
+                    protocol, "reusing cached connection (post-lock)"
+                );
+                return Ok(conn);
+            }
+            self.evict_if_closed(&cache_key);
+        }
+
+        // Establish a fresh connection and cache it.
+        let connection = self
+            .endpoint
+            .connect(addr, protocol.as_bytes())
+            .await
+            .map_err(|e| Error::Transport(format!("connect failed: {e}")))?;
+
+        self.connection_cache
+            .lock()
+            .unwrap()
+            .insert(cache_key, connection.clone());
+
+        Ok(connection)
+    }
+
     fn resolve_addr(&self, endpoint_id: &str) -> Result<EndpointAddr> {
         let target_id: EndpointId = endpoint_id
             .trim()
@@ -418,9 +494,14 @@ impl MaEndpoint for IrohEndpoint {
             ));
         }
         let addr = self.resolve_addr(endpoint_id)?;
-        let channel = self.open_addr_cached(endpoint_id, addr, protocol).await?;
+        // Use get_or_connect rather than open_addr_cached so that no bi-directional
+        // stream is opened proactively.  Opening a stream here would cause the
+        // accepting side's read_to_end() to block until the stream is finished,
+        // which only happens when the Outbox is dropped — leading to accept-handler
+        // timeouts when the Outbox is held idle between sends.
+        let connection = self.get_or_connect(endpoint_id, addr, protocol).await?;
         Ok(Outbox::from_transport(
-            channel,
+            CachedChannel { connection },
             did.to_string(),
             protocol.to_string(),
         ))
@@ -480,6 +561,45 @@ impl OutboxWire for LoopbackWire {
         Ok(())
     }
 
+    fn close_box(self: Box<Self>) {}
+}
+
+/// A write handle backed by a persistent cached [`Connection`].
+///
+/// Unlike [`Channel`], `CachedChannel` opens a **new** bi-directional stream
+/// for every message and finishes it immediately after sending.  This prevents
+/// the accepting side's `read_to_end()` from waiting indefinitely on an idle
+/// stream while the outbox is held between sends, which would otherwise cause
+/// the iroh Router to time out the accept handler.
+#[derive(Debug)]
+struct CachedChannel {
+    connection: Connection,
+}
+
+#[async_trait]
+impl OutboxWire for CachedChannel {
+    async fn send_payload(&mut self, payload: &[u8]) -> Result<()> {
+        let (mut send, mut recv): (SendStream, _) = self
+            .connection
+            .open_bi()
+            .await
+            .map_err(|e| Error::Transport(format!("open_bi failed: {e}")))?;
+        // Explicitly stop the recv half immediately — we never read from it.
+        // This sends STOP_SENDING to the remote rather than relying on Drop.
+        let _ = recv.stop(0u32.into());
+        send.write_all(payload)
+            .await
+            .map_err(|e| Error::Transport(format!("channel write failed: {e}")))?;
+        send.flush()
+            .await
+            .map_err(|e| Error::Transport(format!("channel flush failed: {e}")))?;
+        let _ = send.finish();
+        Ok(())
+    }
+
+    /// The underlying connection is owned by the endpoint's connection cache,
+    /// not by this handle.  Dropping this clone does not close the connection;
+    /// the cache clone keeps it alive until `IrohEndpoint::close()` is called.
     fn close_box(self: Box<Self>) {}
 }
 
