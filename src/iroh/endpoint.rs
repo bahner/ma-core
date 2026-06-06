@@ -9,6 +9,7 @@ use iroh::{
     Endpoint, EndpointAddr, EndpointId, SecretKey,
 };
 use tokio::io::AsyncWriteExt;
+use tokio::time::timeout;
 use tracing::{debug, warn};
 
 use crate::endpoint::{MaEndpoint, DEFAULT_INBOX_CAPACITY};
@@ -23,6 +24,9 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 
 const DEFAULT_MAX_INBOUND_MESSAGE_SIZE: usize = 1024 * 1024;
+/// Maximum time to wait for a complete inbound stream before treating the
+/// connection as a slowloris/stall attack and dropping it.
+const DEFAULT_INBOUND_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 type ConnectLocks = Mutex<HashMap<(String, String), Arc<AsyncMutex<()>>>>;
 
@@ -636,9 +640,14 @@ impl ProtocolHandler for InboxProtocolHandler {
                 }
             };
 
-            let payload = match recv.read_to_end(self.max_message_size).await {
-                Ok(payload) => payload,
-                Err(err) => {
+            let payload = match timeout(
+                DEFAULT_INBOUND_READ_TIMEOUT,
+                recv.read_to_end(self.max_message_size),
+            )
+            .await
+            {
+                Ok(Ok(payload)) => payload,
+                Ok(Err(err)) => {
                     warn!(
                         protocol = %self.protocol,
                         remote = %connection.remote_id(),
@@ -647,6 +656,15 @@ impl ProtocolHandler for InboxProtocolHandler {
                     );
                     let _ = send.finish();
                     continue;
+                }
+                Err(_elapsed) => {
+                    warn!(
+                        protocol = %self.protocol,
+                        remote = %connection.remote_id(),
+                        "inbound stream read timed out — dropping connection"
+                    );
+                    let _ = send.finish();
+                    break;
                 }
             };
 
