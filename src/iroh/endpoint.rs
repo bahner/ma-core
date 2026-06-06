@@ -640,66 +640,73 @@ impl ProtocolHandler for InboxProtocolHandler {
                 }
             };
 
-            let payload = match timeout(
-                DEFAULT_INBOUND_READ_TIMEOUT,
-                recv.read_to_end(self.max_message_size),
-            )
-            .await
-            {
-                Ok(Ok(payload)) => payload,
-                Ok(Err(err)) => {
+            // Spawn a task per stream so that a stalled or slow sender on one
+            // stream cannot block `accept_bi()` from picking up the next stream
+            // on the same connection.
+            let handler = self.clone();
+            let remote_id = connection.remote_id();
+            tokio::spawn(async move {
+                let payload = match timeout(
+                    DEFAULT_INBOUND_READ_TIMEOUT,
+                    recv.read_to_end(handler.max_message_size),
+                )
+                .await
+                {
+                    Ok(Ok(payload)) => payload,
+                    Ok(Err(err)) => {
+                        warn!(
+                            protocol = %handler.protocol,
+                            remote = %remote_id,
+                            error = %err,
+                            "failed to read inbound stream"
+                        );
+                        let _ = send.finish();
+                        return;
+                    }
+                    Err(_elapsed) => {
+                        warn!(
+                            protocol = %handler.protocol,
+                            remote = %remote_id,
+                            "inbound stream read timed out — dropping stream"
+                        );
+                        let _ = send.finish();
+                        return;
+                    }
+                };
+
+                let _ = send.finish();
+
+                let message = match Message::decode(&payload) {
+                    Ok(message) => message,
+                    Err(err) => {
+                        warn!(
+                            protocol = %handler.protocol,
+                            remote = %remote_id,
+                            error = %err,
+                            "invalid inbound message payload"
+                        );
+                        return;
+                    }
+                };
+
+                if let Err(err) = message.headers().validate() {
                     warn!(
-                        protocol = %self.protocol,
-                        remote = %connection.remote_id(),
+                        protocol = %handler.protocol,
+                        remote = %remote_id,
                         error = %err,
-                        "failed to read inbound stream"
+                        "invalid inbound message headers"
                     );
-                    let _ = send.finish();
-                    continue;
+                    return;
                 }
-                Err(_elapsed) => {
-                    warn!(
-                        protocol = %self.protocol,
-                        remote = %connection.remote_id(),
-                        "inbound stream read timed out — dropping connection"
-                    );
-                    let _ = send.finish();
-                    break;
-                }
-            };
 
-            let _ = send.finish();
+                let expires_at = if message.exp == 0 {
+                    0
+                } else {
+                    message.exp / 1_000_000_000
+                };
 
-            let message = match Message::decode(&payload) {
-                Ok(message) => message,
-                Err(err) => {
-                    warn!(
-                        protocol = %self.protocol,
-                        remote = %connection.remote_id(),
-                        error = %err,
-                        "invalid inbound message payload"
-                    );
-                    continue;
-                }
-            };
-
-            if let Err(err) = message.headers().validate() {
-                warn!(
-                    protocol = %self.protocol,
-                    remote = %connection.remote_id(),
-                    error = %err,
-                    "invalid inbound message headers"
-                );
-                continue;
-            }
-
-            let expires_at = if message.exp == 0 {
-                0
-            } else {
-                message.exp / 1_000_000_000
-            };
-
-            self.inbox.push(now_secs(), expires_at, message);
+                handler.inbox.push(now_secs(), expires_at, message);
+            });
         }
 
         Ok(())
