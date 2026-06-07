@@ -9,6 +9,7 @@ use iroh::{
     Endpoint, EndpointAddr, EndpointId, SecretKey,
 };
 use tokio::io::AsyncWriteExt;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::time::timeout;
 use tracing::{debug, warn};
 
@@ -645,6 +646,8 @@ impl ProtocolHandler for InboxProtocolHandler {
             // on the same connection.
             let handler = self.clone();
             let remote_id = connection.remote_id();
+
+            #[cfg(not(target_arch = "wasm32"))]
             tokio::spawn(async move {
                 let payload = match timeout(
                     DEFAULT_INBOUND_READ_TIMEOUT,
@@ -668,6 +671,56 @@ impl ProtocolHandler for InboxProtocolHandler {
                             protocol = %handler.protocol,
                             remote = %remote_id,
                             "inbound stream read timed out — dropping stream"
+                        );
+                        let _ = send.finish();
+                        return;
+                    }
+                };
+
+                let _ = send.finish();
+
+                let message = match Message::decode(&payload) {
+                    Ok(message) => message,
+                    Err(err) => {
+                        warn!(
+                            protocol = %handler.protocol,
+                            remote = %remote_id,
+                            error = %err,
+                            "invalid inbound message payload"
+                        );
+                        return;
+                    }
+                };
+
+                if let Err(err) = message.headers().validate() {
+                    warn!(
+                        protocol = %handler.protocol,
+                        remote = %remote_id,
+                        error = %err,
+                        "invalid inbound message headers"
+                    );
+                    return;
+                }
+
+                let expires_at = if message.exp == 0 {
+                    0
+                } else {
+                    message.exp / 1_000_000_000
+                };
+
+                handler.inbox.push(now_secs(), expires_at, message);
+            });
+
+            #[cfg(target_arch = "wasm32")]
+            wasm_bindgen_futures::spawn_local(async move {
+                let payload = match recv.read_to_end(handler.max_message_size).await {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        warn!(
+                            protocol = %handler.protocol,
+                            remote = %remote_id,
+                            error = %err,
+                            "failed to read inbound stream"
                         );
                         let _ = send.finish();
                         return;
