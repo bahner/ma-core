@@ -44,7 +44,10 @@ pub struct IrohEndpoint {
     /// Keeping a `Connection` clone alive prevents iroh from sending
     /// `APPLICATION_CLOSE` when a `Channel` is dropped after sending,
     /// which would otherwise race with the receiver's `accept_bi()` loop.
-    connection_cache: Mutex<HashMap<(String, String), Connection>>,
+    ///
+    /// Shared with `InboxProtocolHandler` so that inbound connections from
+    /// NAT-ed peers (e.g. browser wasm) are cached and reused for replies.
+    connection_cache: Arc<Mutex<HashMap<(String, String), Connection>>>,
     /// Per-`(endpoint_id, protocol)` mutex that serialises concurrent fresh-connection
     /// attempts to the *same* peer+protocol pair.
     ///
@@ -97,7 +100,7 @@ impl IrohEndpoint {
             protocols: Vec::new(),
             inboxes: BTreeMap::new(),
             router: None,
-            connection_cache: Mutex::new(HashMap::new()),
+            connection_cache: Arc::new(Mutex::new(HashMap::new())),
             connect_locks: Mutex::new(HashMap::new()),
         })
     }
@@ -318,7 +321,11 @@ impl IrohEndpoint {
         let mut builder = Router::builder(self.endpoint.clone());
         for protocol in &self.protocols {
             if let Some(inbox) = self.inboxes.get(protocol) {
-                let handler = InboxProtocolHandler::new(protocol.clone(), inbox.clone());
+                let handler = InboxProtocolHandler::new(
+                    protocol.clone(),
+                    inbox.clone(),
+                    Arc::clone(&self.connection_cache),
+                );
                 builder = builder.accept(protocol.as_bytes(), handler);
             }
         }
@@ -690,14 +697,22 @@ struct InboxProtocolHandler {
     protocol: String,
     inbox: Inbox<Message>,
     max_message_size: usize,
+    /// Shared with `IrohEndpoint` — inbound connections are inserted here so
+    /// the outbound send path can reuse them for replies to NAT-ed peers.
+    connection_cache: Arc<Mutex<HashMap<(String, String), Connection>>>,
 }
 
 impl InboxProtocolHandler {
-    fn new(protocol: String, inbox: Inbox<Message>) -> Self {
+    fn new(
+        protocol: String,
+        inbox: Inbox<Message>,
+        connection_cache: Arc<Mutex<HashMap<(String, String), Connection>>>,
+    ) -> Self {
         Self {
             protocol,
             inbox,
             max_message_size: DEFAULT_MAX_INBOUND_MESSAGE_SIZE,
+            connection_cache,
         }
     }
 }
@@ -705,6 +720,14 @@ impl InboxProtocolHandler {
 impl ProtocolHandler for InboxProtocolHandler {
     #[allow(clippy::too_many_lines)]
     async fn accept(&self, connection: Connection) -> std::result::Result<(), AcceptError> {
+        // Cache this inbound connection so the outbound send path can reuse it
+        // for replies without needing to open a new connection back through NAT.
+        let cache_key = (connection.remote_id().to_string(), self.protocol.clone());
+        self.connection_cache
+            .lock()
+            .unwrap()
+            .insert(cache_key.clone(), connection.clone());
+
         loop {
             let (mut send, mut recv) = match connection.accept_bi().await {
                 Ok(streams) => streams,
@@ -729,7 +752,6 @@ impl ProtocolHandler for InboxProtocolHandler {
                 }
             };
 
-            // Spawn a task per stream so that a stalled or slow sender on one
             // stream cannot block `accept_bi()` from picking up the next stream
             // on the same connection.
             let handler = self.clone();
@@ -859,6 +881,10 @@ impl ProtocolHandler for InboxProtocolHandler {
                 handler.inbox.push(now_secs(), expires_at, message);
             });
         }
+
+        // Connection closed — evict from cache so stale entries don't block
+        // future reconnects from the same peer.
+        self.connection_cache.lock().unwrap().remove(&cache_key);
 
         Ok(())
     }
