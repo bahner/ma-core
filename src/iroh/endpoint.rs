@@ -11,7 +11,9 @@ use iroh::{
 use tokio::io::AsyncWriteExt;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::time::timeout;
-use tracing::{debug, warn};
+use tracing::debug;
+#[cfg(not(target_arch = "wasm32"))]
+use tracing::warn;
 
 use crate::endpoint::{MaEndpoint, DEFAULT_INBOX_CAPACITY};
 use crate::error::{Error, Result};
@@ -358,6 +360,7 @@ impl IrohEndpoint {
     /// Unlike [`open_addr_cached`] this does **not** open a bi-directional stream on the
     /// connection.  Use this when you want to warm up the connection for future sends
     /// without causing the accepting side to block on an idle stream.
+    #[allow(clippy::too_many_lines)]
     async fn get_or_connect(
         &self,
         endpoint_id: &str,
@@ -420,6 +423,80 @@ impl IrohEndpoint {
             .lock()
             .unwrap()
             .insert(cache_key, connection.clone());
+
+        // In WASM the iroh Router only watches connections from endpoint.accept()
+        // (connections the remote dialled into us). When the remote reuses our
+        // outbound connection to open a reply stream, the Router never sees it.
+        // Spawn a per-connection accept_bi() loop so those reply streams reach
+        // the correct inbox regardless of which connection path the remote uses.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let normalized = normalize_protocol(protocol);
+            if let Some(inbox) = self.inboxes.get(&normalized) {
+                let inbox_clone = inbox.clone();
+                let conn_clone = connection.clone();
+                let proto_label = normalized.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    loop {
+                        match conn_clone.accept_bi().await {
+                            Ok((mut send, mut recv)) => {
+                                let inbox = inbox_clone.clone();
+                                let label = proto_label.clone();
+                                wasm_bindgen_futures::spawn_local(async move {
+                                    web_sys::console::info_1(
+                                        &format!("[iroh] reply stream on outbound conn: protocol={label}").into(),
+                                    );
+                                    let payload = match recv
+                                        .read_to_end(DEFAULT_MAX_INBOUND_MESSAGE_SIZE)
+                                        .await
+                                    {
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            web_sys::console::warn_1(
+                                                &format!(
+                                                    "[iroh] outbound reply stream read error: {e}"
+                                                )
+                                                .into(),
+                                            );
+                                            let _ = send.finish();
+                                            return;
+                                        }
+                                    };
+                                    let _ = send.finish();
+                                    let message = match Message::decode(&payload) {
+                                        Ok(m) => m,
+                                        Err(e) => {
+                                            web_sys::console::warn_1(
+                                                &format!("[iroh] outbound reply decode error: {e}")
+                                                    .into(),
+                                            );
+                                            return;
+                                        }
+                                    };
+                                    if let Err(e) = message.headers().validate() {
+                                        web_sys::console::warn_1(
+                                            &format!("[iroh] outbound reply headers invalid: {e}")
+                                                .into(),
+                                        );
+                                        return;
+                                    }
+                                    web_sys::console::info_1(
+                                        &format!("[iroh] outbound reply push: protocol={label} msg_id={}", message.id).into(),
+                                    );
+                                    let expires_at = if message.exp == 0 {
+                                        0
+                                    } else {
+                                        message.exp / 1_000_000_000
+                                    };
+                                    inbox.push(now_secs(), expires_at, message);
+                                });
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                });
+            }
+        }
 
         Ok(connection)
     }
@@ -626,6 +703,7 @@ impl InboxProtocolHandler {
 }
 
 impl ProtocolHandler for InboxProtocolHandler {
+    #[allow(clippy::too_many_lines)]
     async fn accept(&self, connection: Connection) -> std::result::Result<(), AcceptError> {
         loop {
             let (mut send, mut recv) = match connection.accept_bi().await {
@@ -636,6 +714,16 @@ impl ProtocolHandler for InboxProtocolHandler {
                         remote = %connection.remote_id(),
                         error = %err,
                         "inbound connection closed"
+                    );
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::warn_1(
+                        &format!(
+                            "[iroh] accept_bi closed: protocol={} remote={} err={}",
+                            self.protocol,
+                            connection.remote_id(),
+                            err
+                        )
+                        .into(),
                     );
                     break;
                 }
@@ -713,14 +801,18 @@ impl ProtocolHandler for InboxProtocolHandler {
 
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
+                web_sys::console::info_1(
+                    &format!(
+                        "[iroh] inbound stream: protocol={} remote={}",
+                        handler.protocol, remote_id
+                    )
+                    .into(),
+                );
                 let payload = match recv.read_to_end(handler.max_message_size).await {
                     Ok(payload) => payload,
                     Err(err) => {
-                        warn!(
-                            protocol = %handler.protocol,
-                            remote = %remote_id,
-                            error = %err,
-                            "failed to read inbound stream"
+                        web_sys::console::warn_1(
+                            &format!("[iroh] failed to read inbound stream: protocol={} remote={} err={}", handler.protocol, remote_id, err).into(),
                         );
                         let _ = send.finish();
                         return;
@@ -732,25 +824,31 @@ impl ProtocolHandler for InboxProtocolHandler {
                 let message = match Message::decode(&payload) {
                     Ok(message) => message,
                     Err(err) => {
-                        warn!(
-                            protocol = %handler.protocol,
-                            remote = %remote_id,
-                            error = %err,
-                            "invalid inbound message payload"
+                        web_sys::console::warn_1(
+                            &format!("[iroh] invalid inbound message payload: protocol={} remote={} err={}", handler.protocol, remote_id, err).into(),
                         );
                         return;
                     }
                 };
 
                 if let Err(err) = message.headers().validate() {
-                    warn!(
-                        protocol = %handler.protocol,
-                        remote = %remote_id,
-                        error = %err,
-                        "invalid inbound message headers"
+                    web_sys::console::warn_1(
+                        &format!(
+                            "[iroh] invalid inbound message headers: protocol={} remote={} err={}",
+                            handler.protocol, remote_id, err
+                        )
+                        .into(),
                     );
                     return;
                 }
+
+                web_sys::console::debug_1(
+                    &format!(
+                        "[iroh] inbox push: protocol={} msg_id={}",
+                        handler.protocol, message.id
+                    )
+                    .into(),
+                );
 
                 let expires_at = if message.exp == 0 {
                     0

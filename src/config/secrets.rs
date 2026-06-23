@@ -51,7 +51,7 @@ use argon2::Argon2;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, KeyInit};
-use rand::RngCore;
+use rand_core::RngCore;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
@@ -153,7 +153,7 @@ impl Clone for SecretBundle {
 impl SecretBundle {
     /// Generate a new bundle with four random standard keys and no extra keys.
     pub fn generate() -> Self {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand_core::OsRng;
         let mut b = Self {
             iroh_secret_key: [0u8; 32],
             ipns_secret_key: [0u8; 32],
@@ -187,7 +187,7 @@ impl SecretBundle {
     pub fn generate_key(&mut self, name: &str) -> Result<[u8; 32]> {
         validate_key_name(name)?;
         let mut key = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut key);
+        rand_core::OsRng.fill_bytes(&mut key);
         self.extra_keys.insert(name.to_string(), key);
         Ok(key)
     }
@@ -263,7 +263,7 @@ impl SecretBundle {
     /// A fresh random salt and nonce are generated for each call.
     pub fn encrypt(&self, passphrase: &str) -> Result<Vec<u8>> {
         let mut salt = [0u8; 16];
-        rand::rngs::OsRng.fill_bytes(&mut salt);
+        rand_core::OsRng.fill_bytes(&mut salt);
 
         let mut key_bytes = [0u8; 32];
         Argon2::default()
@@ -271,7 +271,7 @@ impl SecretBundle {
             .map_err(|e| Error::Secrets(e.to_string()))?;
 
         let mut nonce_bytes = [0u8; 12];
-        rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
+        rand_core::OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = *chacha20poly1305::Nonce::from_slice(&nonce_bytes);
 
         let cipher = ChaCha20Poly1305::new_from_slice(&key_bytes)
@@ -341,8 +341,22 @@ impl SecretBundle {
 
     /// Generate a random alphanumeric passphrase (43 characters ≈ 256 bits entropy).
     pub fn generate_passphrase() -> String {
-        use rand::distributions::{Alphanumeric, DistString};
-        Alphanumeric.sample_string(&mut rand::rngs::OsRng, 43)
+        const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        // 248 = 62 * 4: reject bytes >= 248 to avoid modulo bias
+        const ACCEPT_BELOW: u8 = 248;
+        let mut result = String::with_capacity(43);
+        let mut buf = [0u8; 64];
+        loop {
+            rand_core::OsRng.fill_bytes(&mut buf);
+            for &b in &buf {
+                if b < ACCEPT_BELOW {
+                    result.push(CHARSET[(b as usize) % 62] as char);
+                    if result.len() == 43 {
+                        return result;
+                    }
+                }
+            }
+        }
     }
 
     /// Derive the DID identity deterministically from all four bundle keys.

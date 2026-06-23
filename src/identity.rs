@@ -156,8 +156,8 @@ pub fn generate_secret_key_file(path: &Path) -> Result<[u8; 32]> {
     }
 
     let mut key_bytes = [0u8; 32];
-    use rand::RngCore;
-    rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+    use rand_core::RngCore;
+    rand_core::OsRng.fill_bytes(&mut key_bytes);
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
