@@ -22,6 +22,8 @@ use crate::iroh::channel::Channel;
 use crate::outbox::{Outbox, OutboxWire};
 use crate::transport::transport_string;
 use crate::{Document, Message};
+#[cfg(feature = "gossip")]
+use iroh_gossip::net::Gossip;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
@@ -54,6 +56,11 @@ pub struct IrohEndpoint {
     /// Using one lock per key (rather than a single global lock) means a hung or slow
     /// connection attempt to one peer can never block connections to a different peer.
     connect_locks: ConnectLocks,
+    /// Lazily initialised iroh-gossip node.  Created on the first call to
+    /// [`gossip_subscribe`].  Reused for all subsequent topic subscriptions
+    /// so all topics share a single gossip mesh node.
+    #[cfg(feature = "gossip")]
+    gossip: Mutex<Option<Gossip>>,
 }
 
 impl IrohEndpoint {
@@ -102,12 +109,51 @@ impl IrohEndpoint {
             router: None,
             connection_cache: Arc::new(Mutex::new(HashMap::new())),
             connect_locks: Mutex::new(HashMap::new()),
+            #[cfg(feature = "gossip")]
+            gossip: Mutex::new(None),
         })
     }
 
     /// Access the underlying iroh endpoint (for Router setup, gossip, etc.).
     pub fn inner(&self) -> &Endpoint {
         &self.endpoint
+    }
+
+    /// Subscribe to a gossip topic, lazily creating the iroh-gossip node on
+    /// the first call and reusing it for all subsequent subscriptions.
+    ///
+    /// Returns `(GossipSender, GossipReceiver)` for the given topic.  The
+    /// receiver is a `Stream<Item = Result<Event, ApiError>>` — drive it with
+    /// `StreamExt::next()` to receive incoming broadcast messages.
+    #[cfg(feature = "gossip")]
+    pub async fn gossip_subscribe(
+        &self,
+        topic_id: [u8; 32],
+        peers: Vec<iroh::EndpointId>,
+    ) -> Result<(
+        iroh_gossip::api::GossipSender,
+        iroh_gossip::api::GossipReceiver,
+    )> {
+        use iroh_gossip::proto::TopicId;
+
+        let gossip = {
+            let mut lock = self
+                .gossip
+                .lock()
+                .map_err(|_| Error::Transport("gossip mutex poisoned".into()))?;
+            if lock.is_none() {
+                *lock = Some(Gossip::builder().spawn(self.endpoint.clone()));
+            }
+            lock.as_ref().unwrap().clone()
+        };
+
+        let topic = TopicId::from_bytes(topic_id);
+        let topic_handle = gossip
+            .subscribe_and_join(topic, peers)
+            .await
+            .map_err(|e| Error::Transport(format!("gossip subscribe failed: {e}")))?;
+
+        Ok(topic_handle.split())
     }
 
     /// Consume self and return the underlying iroh endpoint.
@@ -621,6 +667,18 @@ impl MaEndpoint for IrohEndpoint {
 
     async fn close(&mut self) {
         IrohEndpoint::close(self).await;
+    }
+
+    #[cfg(feature = "gossip")]
+    async fn gossip_subscribe(
+        &self,
+        topic_id: [u8; 32],
+        peers: Vec<iroh::EndpointId>,
+    ) -> Result<(
+        iroh_gossip::api::GossipSender,
+        iroh_gossip::api::GossipReceiver,
+    )> {
+        IrohEndpoint::gossip_subscribe(self, topic_id, peers).await
     }
 }
 

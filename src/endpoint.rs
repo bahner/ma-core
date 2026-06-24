@@ -19,6 +19,10 @@ use crate::Document;
 use crate::Message;
 #[cfg(feature = "iroh")]
 use crate::Outbox;
+#[cfg(feature = "gossip")]
+use iroh::EndpointId;
+#[cfg(feature = "gossip")]
+use iroh_gossip::api::{GossipReceiver, GossipSender};
 
 /// Default inbox capacity for services.
 pub const DEFAULT_INBOX_CAPACITY: usize = 256;
@@ -120,6 +124,23 @@ pub trait MaEndpoint: Send + Sync {
         did: &str,
         protocol: &str,
     ) -> Result<Outbox>;
+
+    /// Subscribe to a gossip topic and return a sender/receiver pair.
+    ///
+    /// The first call lazily creates the iroh-gossip node bound to this
+    /// endpoint.  Subsequent calls reuse the same node.  `topic_id` is the
+    /// 32-byte BLAKE3 hash of the topic name string.  Pass an empty `peers`
+    /// slice to join without bootstrap peers (fine for the first node).
+    #[cfg(feature = "gossip")]
+    async fn gossip_subscribe(
+        &self,
+        _topic_id: [u8; 32],
+        _peers: Vec<EndpointId>,
+    ) -> Result<(GossipSender, GossipReceiver)> {
+        Err(crate::error::Error::Transport(
+            "gossip_subscribe not supported on this endpoint".to_string(),
+        ))
+    }
 
     /// Fire-and-forget to a target on the default inbox protocol.
     async fn send(&self, target: &str, message: &Message) -> Result<()> {
