@@ -114,17 +114,26 @@ impl IrohEndpoint {
         })
     }
 
+    /// Initialize the gossip node eagerly so it can be registered in the
+    /// router.  Must be called before [`start_router`] (i.e. before the
+    /// first [`service`] call).  Subsequent calls are no-ops.
+    #[cfg(feature = "gossip")]
+    pub fn enable_gossip(&mut self) {
+        let mut lock = self.gossip.lock().unwrap();
+        if lock.is_none() {
+            *lock = Some(Gossip::builder().spawn(self.endpoint.clone()));
+        }
+    }
+
     /// Access the underlying iroh endpoint (for Router setup, gossip, etc.).
     pub fn inner(&self) -> &Endpoint {
         &self.endpoint
     }
 
-    /// Subscribe to a gossip topic, lazily creating the iroh-gossip node on
-    /// the first call and reusing it for all subsequent subscriptions.
+    /// Subscribe to a gossip topic using the pre-initialised Gossip node.
     ///
-    /// Returns `(GossipSender, GossipReceiver)` for the given topic.  The
-    /// receiver is a `Stream<Item = Result<Event, ApiError>>` — drive it with
-    /// `StreamExt::next()` to receive incoming broadcast messages.
+    /// Returns `Err` if [`enable_gossip`] was not called before the first
+    /// `service()` call.
     #[cfg(feature = "gossip")]
     pub async fn gossip_subscribe(
         &self,
@@ -136,16 +145,16 @@ impl IrohEndpoint {
     )> {
         use iroh_gossip::proto::TopicId;
 
-        let gossip = {
-            let mut lock = self
-                .gossip
-                .lock()
-                .map_err(|_| Error::Transport("gossip mutex poisoned".into()))?;
-            if lock.is_none() {
-                *lock = Some(Gossip::builder().spawn(self.endpoint.clone()));
-            }
-            lock.as_ref().unwrap().clone()
-        };
+        let gossip = self
+            .gossip
+            .lock()
+            .map_err(|_| Error::Transport("gossip mutex poisoned".into()))?
+            .clone()
+            .ok_or_else(|| {
+                Error::Transport(
+                    "gossip not enabled — call enable_gossip() before service()".into(),
+                )
+            })?;
 
         let topic = TopicId::from_bytes(topic_id);
         let topic_handle = gossip
@@ -365,6 +374,13 @@ impl IrohEndpoint {
         }
 
         let mut builder = Router::builder(self.endpoint.clone());
+
+        // Register gossip ALPN if the consumer called enable_gossip().
+        #[cfg(feature = "gossip")]
+        if let Some(g) = self.gossip.lock().ok().and_then(|g| g.clone()) {
+            builder = builder.accept(iroh_gossip::net::GOSSIP_ALPN, g);
+        }
+
         for protocol in &self.protocols {
             if let Some(inbox) = self.inboxes.get(protocol) {
                 let handler = InboxProtocolHandler::new(
@@ -667,6 +683,11 @@ impl MaEndpoint for IrohEndpoint {
 
     async fn close(&mut self) {
         IrohEndpoint::close(self).await;
+    }
+
+    #[cfg(feature = "gossip")]
+    fn enable_gossip(&mut self) {
+        IrohEndpoint::enable_gossip(self);
     }
 
     #[cfg(feature = "gossip")]

@@ -127,10 +127,9 @@ pub trait MaEndpoint: Send + Sync {
 
     /// Subscribe to a gossip topic and return a sender/receiver pair.
     ///
-    /// The first call lazily creates the iroh-gossip node bound to this
-    /// endpoint.  Subsequent calls reuse the same node.  `topic_id` is the
-    /// 32-byte BLAKE3 hash of the topic name string.  Pass an empty `peers`
-    /// slice to join without bootstrap peers (fine for the first node).
+    /// Requires that `enable_gossip` was called before the first `service`
+    /// call so the gossip protocol handler is registered in the router.
+    /// Returns `Err` if gossip was not enabled.
     #[cfg(feature = "gossip")]
     async fn gossip_subscribe(
         &self,
@@ -138,9 +137,18 @@ pub trait MaEndpoint: Send + Sync {
         _peers: Vec<EndpointId>,
     ) -> Result<(GossipSender, GossipReceiver)> {
         Err(crate::error::Error::Transport(
-            "gossip_subscribe not supported on this endpoint".to_string(),
+            "gossip not enabled — call enable_gossip() before service()".to_string(),
         ))
     }
+
+    /// Opt the endpoint into gossip support.
+    ///
+    /// **Must be called before the first `service` call** so that the
+    /// gossip ALPN handler is included when the router is built.
+    /// Calling after the router has started has no effect on inbound
+    /// gossip connections.  Safe to call multiple times (no-op after first).
+    #[cfg(feature = "gossip")]
+    fn enable_gossip(&mut self) {}
 
     /// Fire-and-forget to a target on the default inbox protocol.
     async fn send(&self, target: &str, message: &Message) -> Result<()> {
