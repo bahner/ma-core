@@ -33,9 +33,9 @@ pub async fn join_gossip_topic(
     let gossip = Gossip::builder().spawn(endpoint);
 
     let topic_handle = gossip
-        .subscribe_and_join(topic, peers)
+        .subscribe(topic, peers)
         .await
-        .context("iroh-gossip subscribe_and_join failed")?;
+        .context("iroh-gossip subscribe failed")?;
 
     let (sender, _receiver) = topic_handle.split();
     Ok((gossip, sender))

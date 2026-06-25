@@ -162,7 +162,7 @@ impl IrohEndpoint {
 
         let topic = TopicId::from_bytes(topic_id);
         let topic_handle = gossip
-            .subscribe_and_join(topic, peers)
+            .subscribe(topic, peers)
             .await
             .map_err(|e| Error::Transport(format!("gossip subscribe failed: {e}")))?;
 
