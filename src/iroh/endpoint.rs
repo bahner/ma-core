@@ -130,10 +130,13 @@ impl IrohEndpoint {
         &self.endpoint
     }
 
-    /// Subscribe to a gossip topic using the pre-initialised Gossip node.
+    /// Subscribe to a gossip topic.
     ///
-    /// Returns `Err` if [`enable_gossip`] was not called before the first
-    /// `service()` call.
+    /// If `enable_gossip` was called before the first `service` call, the
+    /// gossip handler is registered in the router (required for inbound
+    /// connections on native targets).  On WASM, where there are no inbound
+    /// connections, this method works correctly even without prior
+    /// `enable_gossip` by lazily initialising the gossip node.
     #[cfg(feature = "gossip")]
     pub async fn gossip_subscribe(
         &self,
@@ -145,16 +148,17 @@ impl IrohEndpoint {
     )> {
         use iroh_gossip::proto::TopicId;
 
-        let gossip = self
-            .gossip
-            .lock()
-            .map_err(|_| Error::Transport("gossip mutex poisoned".into()))?
-            .clone()
-            .ok_or_else(|| {
-                Error::Transport(
-                    "gossip not enabled — call enable_gossip() before service()".into(),
-                )
-            })?;
+        let gossip = {
+            let mut lock = self
+                .gossip
+                .lock()
+                .map_err(|_| Error::Transport("gossip mutex poisoned".into()))?;
+            if lock.is_none() {
+                // Lazy init for WASM or when enable_gossip was not called.
+                *lock = Some(Gossip::builder().spawn(self.endpoint.clone()));
+            }
+            lock.as_ref().unwrap().clone()
+        };
 
         let topic = TopicId::from_bytes(topic_id);
         let topic_handle = gossip
