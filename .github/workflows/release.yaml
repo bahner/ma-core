@@ -43,7 +43,7 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const workflow_id = "ci.yaml";
+            const workflowName = "CI";
             const tag = "${{ steps.tag.outputs.name }}";
 
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -51,15 +51,14 @@ jobs:
             const delayMs = 15000;
 
             for (let i = 1; i <= maxAttempts; i++) {
-              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
                 owner,
                 repo,
-                workflow_id,
                 event: "push",
                 per_page: 100,
               });
 
-              const ciRun = runs.find((r) => r.head_branch === tag);
+              const ciRun = runs.find((r) => r.name === workflowName && r.head_branch === tag);
 
               if (!ciRun) {
                 core.info(`Attempt ${i}/${maxAttempts}: CI run not found yet for tag ${tag}.`);

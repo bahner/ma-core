@@ -22,8 +22,6 @@ use crate::iroh::channel::Channel;
 use crate::outbox::{Outbox, OutboxWire};
 use crate::transport::transport_string;
 use crate::{Document, Message};
-#[cfg(feature = "gossip")]
-use iroh_gossip::net::Gossip;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
@@ -56,11 +54,6 @@ pub struct IrohEndpoint {
     /// Using one lock per key (rather than a single global lock) means a hung or slow
     /// connection attempt to one peer can never block connections to a different peer.
     connect_locks: ConnectLocks,
-    /// Lazily initialised iroh-gossip node.  Created on the first call to
-    /// [`gossip_subscribe`].  Reused for all subsequent topic subscriptions
-    /// so all topics share a single gossip mesh node.
-    #[cfg(feature = "gossip")]
-    gossip: Mutex<Option<Gossip>>,
 }
 
 impl IrohEndpoint {
@@ -109,64 +102,12 @@ impl IrohEndpoint {
             router: None,
             connection_cache: Arc::new(Mutex::new(HashMap::new())),
             connect_locks: Mutex::new(HashMap::new()),
-            #[cfg(feature = "gossip")]
-            gossip: Mutex::new(None),
         })
-    }
-
-    /// Initialize the gossip node eagerly so it can be registered in the
-    /// router.  Must be called before [`start_router`] (i.e. before the
-    /// first [`service`] call).  Subsequent calls are no-ops.
-    #[cfg(feature = "gossip")]
-    pub fn enable_gossip(&mut self) {
-        let mut lock = self.gossip.lock().unwrap();
-        if lock.is_none() {
-            *lock = Some(Gossip::builder().spawn(self.endpoint.clone()));
-        }
     }
 
     /// Access the underlying iroh endpoint (for Router setup, gossip, etc.).
     pub fn inner(&self) -> &Endpoint {
         &self.endpoint
-    }
-
-    /// Subscribe to a gossip topic.
-    ///
-    /// If `enable_gossip` was called before the first `service` call, the
-    /// gossip handler is registered in the router (required for inbound
-    /// connections on native targets).  On WASM, where there are no inbound
-    /// connections, this method works correctly even without prior
-    /// `enable_gossip` by lazily initialising the gossip node.
-    #[cfg(feature = "gossip")]
-    pub async fn gossip_subscribe(
-        &self,
-        topic_id: [u8; 32],
-        peers: Vec<iroh::EndpointId>,
-    ) -> Result<(
-        iroh_gossip::api::GossipSender,
-        iroh_gossip::api::GossipReceiver,
-    )> {
-        use iroh_gossip::proto::TopicId;
-
-        let gossip = {
-            let mut lock = self
-                .gossip
-                .lock()
-                .map_err(|_| Error::Transport("gossip mutex poisoned".into()))?;
-            if lock.is_none() {
-                // Lazy init for WASM or when enable_gossip was not called.
-                *lock = Some(Gossip::builder().spawn(self.endpoint.clone()));
-            }
-            lock.as_ref().unwrap().clone()
-        };
-
-        let topic = TopicId::from_bytes(topic_id);
-        let topic_handle = gossip
-            .subscribe(topic, peers)
-            .await
-            .map_err(|e| Error::Transport(format!("gossip subscribe failed: {e}")))?;
-
-        Ok(topic_handle.split())
     }
 
     /// Consume self and return the underlying iroh endpoint.
@@ -378,13 +319,6 @@ impl IrohEndpoint {
         }
 
         let mut builder = Router::builder(self.endpoint.clone());
-
-        // Register gossip ALPN if the consumer called enable_gossip().
-        #[cfg(feature = "gossip")]
-        if let Some(g) = self.gossip.lock().ok().and_then(|g| g.clone()) {
-            builder = builder.accept(iroh_gossip::net::GOSSIP_ALPN, g);
-        }
-
         for protocol in &self.protocols {
             if let Some(inbox) = self.inboxes.get(protocol) {
                 let handler = InboxProtocolHandler::new(
@@ -687,23 +621,6 @@ impl MaEndpoint for IrohEndpoint {
 
     async fn close(&mut self) {
         IrohEndpoint::close(self).await;
-    }
-
-    #[cfg(feature = "gossip")]
-    fn enable_gossip(&mut self) {
-        IrohEndpoint::enable_gossip(self);
-    }
-
-    #[cfg(feature = "gossip")]
-    async fn gossip_subscribe(
-        &self,
-        topic_id: [u8; 32],
-        peers: Vec<iroh::EndpointId>,
-    ) -> Result<(
-        iroh_gossip::api::GossipSender,
-        iroh_gossip::api::GossipReceiver,
-    )> {
-        IrohEndpoint::gossip_subscribe(self, topic_id, peers).await
     }
 }
 

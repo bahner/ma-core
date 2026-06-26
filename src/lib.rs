@@ -151,11 +151,6 @@ pub use endpoint::{MaEndpoint, DEFAULT_DELIVERY_PROTOCOL_ID};
 #[cfg(feature = "iroh")]
 pub use outbox::Outbox;
 
-// ─── Re-export gossip types ──────────────────────────────────────────────────
-
-#[cfg(feature = "gossip")]
-pub use iroh_gossip::api::{Event as GossipEvent, GossipReceiver, GossipSender};
-
 /// Create a default ma endpoint backend from 32-byte secret key material.
 ///
 /// This keeps the transport backend type internal while exposing
