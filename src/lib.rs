@@ -28,7 +28,6 @@
 //!
 //! - **`kubo`** — enables native IPFS RPC backend for publishing (native only).
 //! - **`iroh`** — enables the internal iroh QUIC transport backend.
-//! - **`gossip`** — enables internal iroh-gossip broadcast support.
 //! - **`config`** — enables [`Config`], [`SecretBundle`], and [`MaArgs`] for
 //!   YAML-based daemon configuration, encrypted secret bundles, and CLI
 //!   argument parsing. Also provides [`config::SecretBundle::build_document`] and

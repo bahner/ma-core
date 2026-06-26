@@ -2,8 +2,6 @@
 
 pub mod channel;
 mod endpoint;
-#[cfg(feature = "gossip")]
-pub mod gossip;
 
 use crate::error::Result;
 

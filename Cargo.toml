@@ -12,10 +12,9 @@ keywords = ["did", "didcomm", "ipfs", "messaging"]
 categories = ["network-programming", "authentication"]
 
 [features]
-default = ["iroh", "gossip"]
+default = ["iroh"]
 kubo = []
 iroh = ["dep:iroh"]
-gossip = ["iroh", "dep:iroh-gossip"]
 acl = ["dep:serde_yaml"]
 config = [
     "dep:argon2",
@@ -42,7 +41,6 @@ ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 hex = "0.4"
 ipld-core = { version = "0.4", features = ["serde"] }
 iroh = { version = "^1.0", default-features = false, features = ["tls-ring"], optional = true }
-iroh-gossip = { version = "^0.101", default-features = false, features = ["net"], optional = true }
 iroh-base = "^1"
 libp2p-identity = { version = "0.2", features = ["ed25519", "peerid"] }
 multibase = "0.9"

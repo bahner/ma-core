@@ -105,7 +105,7 @@ impl IrohEndpoint {
         })
     }
 
-    /// Access the underlying iroh endpoint (for Router setup, gossip, etc.).
+    /// Access the underlying iroh endpoint (for Router setup, etc.).
     pub fn inner(&self) -> &Endpoint {
         &self.endpoint
     }
