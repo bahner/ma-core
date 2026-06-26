@@ -33,9 +33,6 @@ pub const RPC_PROTOCOL_ID: &str = "/ma/rpc/0.0.1";
 pub const IPFS_PROTOCOL_ID: &str = "/ma/ipfs/0.0.1";
 pub const CRUD_PROTOCOL_ID: &str = "/ma/crud/0.0.1";
 
-/// The well-known broadcast topic / protocol string.
-pub const BROADCAST_TOPIC: &str = "/ma/broadcast/0.0.1";
-
 // ─── Message types (routing / dispatch category) ────────────────────────────
 
 pub const MESSAGE_TYPE_BROADCAST: &str = "application/x-ma-broadcast";

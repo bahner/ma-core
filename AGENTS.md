@@ -47,7 +47,6 @@ src/
   multiformat.rs      — codec constants (CODEC_*)
   outbox.rs           — Outbox (iroh feature)
   service.rs          — Service trait, protocol ID and message type constants
-  topic.rs            — Topic, TopicId, topic_id()
   transport.rs        — transport string parsing helpers
   ttl_queue.rs        — internal TTL queue backing Inbox
 ```

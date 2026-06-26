@@ -89,7 +89,6 @@ mod multiformat;
 #[allow(dead_code)]
 mod outbox;
 pub mod service;
-pub mod topic;
 pub mod transport;
 pub(crate) mod ttl_queue;
 
@@ -128,7 +127,7 @@ pub use acl::{
 // ─── Re-export service constants ────────────────────────────────────────────
 
 pub use service::{
-    Service, BROADCAST_TOPIC, CONTENT_TYPE_CBOR, CONTENT_TYPE_TERM, CONTENT_TYPE_TERM_CBOR,
+    Service, CONTENT_TYPE_CBOR, CONTENT_TYPE_TERM, CONTENT_TYPE_TERM_CBOR,
     CONTENT_TYPE_TERM_DAG_CBOR, CONTENT_TYPE_TERM_YAML, CRUD_PROTOCOL_ID, INBOX_PROTOCOL_ID,
     IPFS_PROTOCOL_ID, MESSAGE_TYPE_BROADCAST, MESSAGE_TYPE_CHAT, MESSAGE_TYPE_CRUD,
     MESSAGE_TYPE_CRUD_REPLY, MESSAGE_TYPE_DOC, MESSAGE_TYPE_EMOTE, MESSAGE_TYPE_IPFS_REQUEST,
@@ -139,10 +138,6 @@ pub use service::{
 // ─── Re-export Inbox ────────────────────────────────────────────────────────
 
 pub use inbox::Inbox;
-
-// ─── Re-export Topic ────────────────────────────────────────────────────────
-
-pub use topic::{topic_id, Topic, TopicId};
 
 // ─── Re-export endpoint trait and implementations ───────────────────────────
 
