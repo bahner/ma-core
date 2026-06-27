@@ -377,13 +377,17 @@ impl IrohEndpoint {
         let cache_key = (endpoint_id.to_string(), protocol.to_string());
 
         // Fast path: reuse live cached connection.
-        if let Some(conn) = self
+        // NOTE: The MutexGuard must be dropped before calling evict_if_closed
+        // (which also locks connection_cache). Using a `let` statement rather
+        // than `if let` ensures the guard is released at the semicolon and not
+        // extended to the end of the block by Rust's temporary-lifetime rules.
+        let maybe_conn = self
             .connection_cache
             .lock()
             .unwrap()
             .get(&cache_key)
-            .cloned()
-        {
+            .cloned();
+        if let Some(conn) = maybe_conn {
             if conn.close_reason().is_none() {
                 debug!(endpoint_id, protocol, "reusing cached connection");
                 return Ok(conn);
@@ -402,13 +406,14 @@ impl IrohEndpoint {
         let _connect_guard = peer_lock.lock().await;
 
         // Re-check after acquiring the lock.
-        if let Some(conn) = self
+        // Same MutexGuard-lifetime fix as the fast path above.
+        let maybe_conn_post = self
             .connection_cache
             .lock()
             .unwrap()
             .get(&cache_key)
-            .cloned()
-        {
+            .cloned();
+        if let Some(conn) = maybe_conn_post {
             if conn.close_reason().is_none() {
                 debug!(
                     endpoint_id,
