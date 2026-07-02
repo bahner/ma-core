@@ -495,12 +495,7 @@ impl IrohEndpoint {
                                     web_sys::console::info_1(
                                         &format!("[iroh] outbound reply push: protocol={label} msg_id={}", message.id).into(),
                                     );
-                                    let expires_at = if message.exp == 0 {
-                                        0
-                                    } else {
-                                        message.exp / 1_000_000_000
-                                    };
-                                    inbox.push(now_secs(), expires_at, message);
+                                    inbox.push(now_secs(), message.exp, message);
                                 });
                             }
                             Err(_) => break,
@@ -609,12 +604,7 @@ impl MaEndpoint for IrohEndpoint {
                 .inboxes
                 .get(&normalized)
                 .ok_or_else(|| Error::NoInboxTransport(format!("no local inbox for {protocol}")))?;
-            let expires_at = if message.exp == 0 {
-                0
-            } else {
-                message.exp / 1_000_000_000
-            };
-            inbox.push(now_secs(), expires_at, message.clone());
+            inbox.push(now_secs(), message.exp, message.clone());
             return Ok(());
         }
         let cbor = message.encode()?;
@@ -646,12 +636,7 @@ impl OutboxWire for LoopbackWire {
     async fn send_payload(&mut self, payload: &[u8]) -> Result<()> {
         let message = Message::decode(payload)?;
         message.headers().validate()?;
-        let expires_at = if message.exp == 0 {
-            0
-        } else {
-            message.exp / 1_000_000_000
-        };
-        self.inbox.push(now_secs(), expires_at, message);
+        self.inbox.push(now_secs(), message.exp, message);
         Ok(())
     }
 
@@ -817,13 +802,7 @@ impl ProtocolHandler for InboxProtocolHandler {
                     return;
                 }
 
-                let expires_at = if message.exp == 0 {
-                    0
-                } else {
-                    message.exp / 1_000_000_000
-                };
-
-                handler.inbox.push(now_secs(), expires_at, message);
+                handler.inbox.push(now_secs(), message.exp, message);
             });
 
             #[cfg(target_arch = "wasm32")]
@@ -877,13 +856,7 @@ impl ProtocolHandler for InboxProtocolHandler {
                     .into(),
                 );
 
-                let expires_at = if message.exp == 0 {
-                    0
-                } else {
-                    message.exp / 1_000_000_000
-                };
-
-                handler.inbox.push(now_secs(), expires_at, message);
+                handler.inbox.push(now_secs(), message.exp, message);
             });
         }
 

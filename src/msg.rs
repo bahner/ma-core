@@ -65,7 +65,7 @@ pub struct Headers {
     pub from: String,
     pub to: String,
     #[serde(rename = "createdAt")]
-    pub created_at: f64,
+    pub created_at: u64,
     #[serde(default)]
     pub exp: u64,
     #[serde(rename = "contentType")]
@@ -164,7 +164,7 @@ pub struct Message {
     pub from: String,
     pub to: String,
     #[serde(rename = "createdAt")]
-    pub created_at: f64,
+    pub created_at: u64,
     #[serde(default)]
     pub exp: u64,
     #[serde(rename = "contentType")]
@@ -184,7 +184,7 @@ impl Message {
         content: &[u8],
         signing_key: &SigningKey,
     ) -> Result<Self> {
-        let exp = now_unix_nanos()? + DEFAULT_MESSAGE_TTL_SECS * 1_000_000_000;
+        let exp = now_unix_secs()? + DEFAULT_MESSAGE_TTL_SECS;
         Self::new_with_exp(
             from,
             to,
@@ -385,7 +385,7 @@ impl Message {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ReplayGuard {
-    seen: HashMap<String, f64>,
+    seen: HashMap<String, u64>,
     window_secs: u64,
 }
 
@@ -417,7 +417,7 @@ impl ReplayGuard {
     fn prune_old(&mut self) -> Result<()> {
         let now = now_unix_secs()?;
         self.seen
-            .retain(|_, seen_at| now - *seen_at <= self.window_secs as f64);
+            .retain(|_, seen_at| now.saturating_sub(*seen_at) <= self.window_secs);
         Ok(())
     }
 }
@@ -580,24 +580,17 @@ fn validate_protocol(kind: &str) -> Result<()> {
     Err(MaError::InvalidMessageType)
 }
 
-fn now_unix_secs() -> Result<f64> {
+fn now_unix_secs() -> Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as f64 / 1_000_000_000.0)
+        .map(|duration| duration.as_secs())
         .map_err(|_| MaError::InvalidMessageTimestamp)
 }
 
-fn now_unix_nanos() -> Result<u64> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .map_err(|_| MaError::InvalidMessageTimestamp)
-}
-
-fn validate_message_freshness(created_at: f64, exp: u64) -> Result<()> {
+fn validate_message_freshness(created_at: u64, exp: u64) -> Result<()> {
     let now = now_unix_secs()?;
 
-    if created_at > now + DEFAULT_MAX_CLOCK_SKEW_SECS as f64 {
+    if created_at > now + DEFAULT_MAX_CLOCK_SKEW_SECS {
         return Err(MaError::MessageFromFuture);
     }
 
@@ -605,8 +598,7 @@ fn validate_message_freshness(created_at: f64, exp: u64) -> Result<()> {
         return Ok(()); // 0 = never expires
     }
 
-    let exp_secs = exp as f64 / 1_000_000_000.0;
-    if now > exp_secs + DEFAULT_MAX_CLOCK_SKEW_SECS as f64 {
+    if now > exp + DEFAULT_MAX_CLOCK_SKEW_SECS {
         return Err(MaError::MessageTooOld);
     }
 
@@ -856,8 +848,8 @@ mod tests {
         )
         .expect("message creation");
 
-        message.created_at = 0.0;
-        message.exp = 1; // 1 ns epoch — well in the past
+        message.created_at = 0;
+        message.exp = 1; // 1 s epoch — well in the past
         message
             .sign(&sender_signing)
             .expect("re-sign with past timestamps");
@@ -879,7 +871,7 @@ mod tests {
         .expect("message creation");
 
         message.created_at =
-            now_unix_secs().expect("current timestamp") + DEFAULT_MAX_CLOCK_SKEW_SECS as f64 + 60.0;
+            now_unix_secs().expect("current timestamp") + DEFAULT_MAX_CLOCK_SKEW_SECS + 60;
         message
             .sign(&sender_signing)
             .expect("re-sign with updated timestamp");
@@ -901,7 +893,7 @@ mod tests {
         )
         .expect("message creation");
 
-        message.created_at = 0.0;
+        message.created_at = 0;
         message.exp = 0; // 0 = never expires
         message.sign(&sender_signing).expect("re-sign with exp=0");
 
@@ -913,7 +905,7 @@ mod tests {
     #[test]
     fn custom_ttl_rejects_expired_message() {
         let (sender_signing, _, sender_document, _, _, recipient_document) = fixture_documents();
-        let now_nanos = now_unix_nanos().expect("current timestamp");
+        let now_secs = now_unix_secs().expect("current timestamp");
         // Create with a valid 60-second window.
         let mut message = Message::new_with_exp(
             sender_document.id.clone(),
@@ -921,7 +913,7 @@ mod tests {
             "application/x-ma-message",
             "text/plain",
             b"look",
-            now_nanos + 60_000_000_000,
+            now_secs + 60,
             &sender_signing,
         )
         .expect("message creation with custom exp");
